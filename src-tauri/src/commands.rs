@@ -1,0 +1,454 @@
+use std::sync::Arc;
+
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
+
+use crate::model::event::op_type;
+use crate::model::{BlockType, Message, MessageType, RichTextBlock, RichTextSpan};
+use crate::storage::{
+    materialize, now_ms, save_pairings, AppSettings, EventStore, MaterializedChat, Pairing,
+};
+use crate::sync::{author_event, SyncEvent};
+use crate::AppState;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "avatarFile")]
+    pub avatar_file: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "isPinned")]
+    pub is_pinned: bool,
+    #[serde(rename = "isArchived")]
+    pub is_archived: bool,
+    #[serde(rename = "isProtected")]
+    pub is_protected: bool,
+    pub tags: Vec<String>,
+    #[serde(rename = "lastMessageAt")]
+    pub last_message_at: Option<i64>,
+    #[serde(rename = "lastMessagePreview")]
+    pub last_message_preview: Option<String>,
+    #[serde(rename = "messageCount")]
+    pub message_count: usize,
+    #[serde(rename = "bubbleColor")]
+    pub bubble_color: Option<String>,
+    #[serde(rename = "bubbleGradient")]
+    pub bubble_gradient: bool,
+    #[serde(rename = "hideName")]
+    pub hide_name: bool,
+}
+
+impl ChatSummary {
+    fn from_materialized(m: &MaterializedChat) -> Self {
+        Self {
+            id: m.metadata.id.clone(),
+            name: m.metadata.name.clone(),
+            avatar_file: m.metadata.avatar_file.clone(),
+            created_at: m.metadata.created_at,
+            is_pinned: m.metadata.is_pinned,
+            is_archived: m.metadata.is_archived,
+            is_protected: m.metadata.is_protected,
+            tags: m.metadata.tags.clone(),
+            last_message_at: m.last_message_at,
+            last_message_preview: m.last_message_preview.clone(),
+            message_count: m.messages.len(),
+            bubble_color: m.metadata.bubble_color.clone(),
+            bubble_gradient: m.metadata.bubble_gradient,
+            hide_name: m.metadata.hide_name,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PairingPayload {
+    pub v: u32,
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub secret: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PairingDescriptor {
+    pub pairing: Pairing,
+    #[serde(rename = "payloadJson")]
+    pub payload_json: String,
+    #[serde(rename = "qrSvg")]
+    pub qr_svg: String,
+}
+
+#[tauri::command]
+pub async fn list_chats(state: State<'_, AppState>) -> Result<Vec<ChatSummary>, String> {
+    list_chats_impl(state.events.clone()).map_err(|e| e.to_string())
+}
+
+fn list_chats_impl(events: Arc<EventStore>) -> anyhow::Result<Vec<ChatSummary>> {
+    let mut out = Vec::new();
+    for chat_id in events.list_chat_ids()? {
+        let evts = events.read_chat(&chat_id)?;
+        if let Some(m) = materialize(evts) {
+            out.push(ChatSummary::from_materialized(&m));
+        }
+    }
+    out.sort_by(|a, b| {
+        b.is_pinned
+            .cmp(&a.is_pinned)
+            .then(b.last_message_at.unwrap_or(0).cmp(&a.last_message_at.unwrap_or(0)))
+            .then(b.created_at.cmp(&a.created_at))
+    });
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn get_chat(
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<Option<MaterializedChat>, String> {
+    let events = state.events.clone();
+    let evts = events.read_chat(&chat_id).map_err(|e| e.to_string())?;
+    Ok(materialize(evts))
+}
+
+#[tauri::command]
+pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDescriptor>, String> {
+    let pairings = state.pairings.read().await;
+    let settings = state.settings.read().await.clone();
+    let identity_device_id = state.identity_device_id.clone();
+    let identity_name = settings.device_name.clone();
+    let host = state.advertised_host.read().await.clone();
+    let mut out = Vec::new();
+    for p in pairings.pairings.iter() {
+        let payload = PairingPayload {
+            v: 1,
+            device_id: identity_device_id.clone(),
+            name: identity_name.clone(),
+            host: host.clone(),
+            port: settings.port,
+            secret: p.secret_b64.clone(),
+        };
+        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+        let qr_svg = make_qr_svg(&payload_json);
+        out.push(PairingDescriptor {
+            pairing: p.clone(),
+            payload_json,
+            qr_svg,
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub async fn create_pairing(
+    state: State<'_, AppState>,
+    label: String,
+) -> Result<PairingDescriptor, String> {
+    let pairing = Pairing::new_with_label(label);
+    {
+        let mut guard = state.pairings.write().await;
+        guard.pairings.push(pairing.clone());
+        save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())?;
+    }
+    let settings = state.settings.read().await.clone();
+    let host = state.advertised_host.read().await.clone();
+    let payload = PairingPayload {
+        v: 1,
+        device_id: state.identity_device_id.clone(),
+        name: settings.device_name.clone(),
+        host,
+        port: settings.port,
+        secret: pairing.secret_b64.clone(),
+    };
+    let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+    let qr_svg = make_qr_svg(&payload_json);
+    Ok(PairingDescriptor {
+        pairing,
+        payload_json,
+        qr_svg,
+    })
+}
+
+#[tauri::command]
+pub async fn delete_pairing(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut guard = state.pairings.write().await;
+    guard.pairings.retain(|p| p.id != id);
+    save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
+    Ok(state.settings.read().await.clone())
+}
+
+#[tauri::command]
+pub async fn update_settings(
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
+    crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
+    *state.settings.write().await = settings.clone();
+    Ok(settings)
+}
+
+#[tauri::command]
+pub async fn list_lan_ips() -> Result<Vec<String>, String> {
+    Ok(crate::network::detect_lan_ips())
+}
+
+#[tauri::command]
+pub async fn set_advertised_host(state: State<'_, AppState>, host: String) -> Result<(), String> {
+    *state.advertised_host.write().await = host;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_advertised_host(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.advertised_host.read().await.clone())
+}
+
+#[tauri::command]
+pub async fn get_device_identity(state: State<'_, AppState>) -> Result<DeviceIdentityView, String> {
+    let settings = state.settings.read().await.clone();
+    Ok(DeviceIdentityView {
+        device_id: state.identity_device_id.clone(),
+        name: settings.device_name,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceIdentityView {
+    #[serde(rename = "deviceId")]
+    pub device_id: String,
+    pub name: String,
+}
+
+// ---------- Phase 2a.2 authoring commands ----------
+
+fn current_message(events: &EventStore, chat_id: &str, message_id: &str) -> Result<Message, String> {
+    let evts = events.read_chat(chat_id).map_err(|e| e.to_string())?;
+    let mat = materialize(evts).ok_or_else(|| "chat not found".to_string())?;
+    mat.messages
+        .into_iter()
+        .find(|m| m.id == message_id)
+        .ok_or_else(|| "message not found".to_string())
+}
+
+#[tauri::command]
+pub async fn author_send_text(
+    state: State<'_, AppState>,
+    chat_id: String,
+    text: String,
+) -> Result<(), String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("empty message".to_string());
+    }
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content: vec![RichTextBlock {
+            block_type: BlockType::Paragraph,
+            spans: vec![RichTextSpan {
+                text: trimmed.to_string(),
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false,
+                color: None,
+                link: None,
+                inline_image: None,
+            }],
+        }],
+        voice_file: None,
+        voice_duration_ms: None,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::Text,
+        is_starred: false,
+        image_files: vec![],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: vec![],
+    };
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_CREATED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn author_toggle_star(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let mut msg = current_message(&state.events, &chat_id, &message_id)?;
+    msg.is_starred = !msg.is_starred;
+    msg.edited_at = Some(now_ms());
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_EDITED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn author_edit_text(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    text: String,
+) -> Result<(), String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("edit cannot be empty".to_string());
+    }
+    let mut msg = current_message(&state.events, &chat_id, &message_id)?;
+    if !matches!(msg.message_type, MessageType::Text) {
+        return Err("only TEXT messages support plaintext edit from desktop".to_string());
+    }
+    msg.content = vec![RichTextBlock {
+        block_type: BlockType::Paragraph,
+        spans: vec![RichTextSpan {
+            text: trimmed.to_string(),
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            color: None,
+            link: None,
+            inline_image: None,
+        }],
+    }];
+    msg.edited_at = Some(now_ms());
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_EDITED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn author_delete_message(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let payload = serde_json::json!({ "messageId": message_id });
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_TOMBSTONED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Phase 2b — return a content-addressed media blob to the frontend as base64.
+/// Frontend uses it as the `src` of an `<audio>` or `<img>` via a `data:` URL.
+/// Returns `None` if the blob hasn't been transferred yet (still pending or peer
+/// reported missing) so the UI can fall back to a placeholder.
+#[tauri::command]
+pub async fn read_blob(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<Option<String>, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    if !state.blobs.exists(&hash, &media_type) {
+        return Ok(None);
+    }
+    let bytes = state
+        .blobs
+        .read(&hash, &media_type)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(B64.encode(bytes)))
+}
+
+/// Forward sync server events into a Tauri event channel so the frontend can react
+/// to them (peer connected, new messages, etc.) without polling.
+pub fn spawn_sync_event_forwarder(app: AppHandle, mut rx: tokio::sync::broadcast::Receiver<SyncEvent>) {
+    tauri::async_runtime::spawn(async move {
+        while let Ok(ev) = rx.recv().await {
+            let _ = app.emit("sync-event", ev_to_json(&ev));
+        }
+    });
+}
+
+fn ev_to_json(ev: &SyncEvent) -> serde_json::Value {
+    match ev {
+        SyncEvent::PeerConnected {
+            peer,
+            pairing_id,
+            phone_id,
+        } => serde_json::json!({"kind":"peer-connected","peer":peer,"pairingId":pairing_id,"phoneId":phone_id}),
+        SyncEvent::PeerAuthFailed { peer } => {
+            serde_json::json!({"kind":"peer-auth-failed","peer":peer})
+        }
+        SyncEvent::EventReceived { chat_id, event_id } => {
+            serde_json::json!({"kind":"event-received","chatId":chat_id,"eventId":event_id})
+        }
+        SyncEvent::EventAuthored { chat_id, event_id } => {
+            serde_json::json!({"kind":"event-authored","chatId":chat_id,"eventId":event_id})
+        }
+        SyncEvent::BlobArrived { hash } => {
+            serde_json::json!({"kind":"blob-arrived","hash":hash})
+        }
+        SyncEvent::PeerDisconnected { peer } => {
+            serde_json::json!({"kind":"peer-disconnected","peer":peer})
+        }
+        SyncEvent::ServerStarted { addr } => {
+            serde_json::json!({"kind":"server-started","addr":addr})
+        }
+        SyncEvent::ServerStopped => serde_json::json!({"kind":"server-stopped"}),
+        SyncEvent::ServerError { message } => {
+            serde_json::json!({"kind":"server-error","message":message})
+        }
+    }
+}
+
+fn make_qr_svg(text: &str) -> String {
+    use qrcode::render::svg;
+    use qrcode::QrCode;
+    match QrCode::new(text.as_bytes()) {
+        Ok(code) => code
+            .render::<svg::Color>()
+            .min_dimensions(256, 256)
+            .quiet_zone(true)
+            .build(),
+        Err(_) => String::new(),
+    }
+}
