@@ -110,7 +110,67 @@ pub async fn get_chat(
 ) -> Result<Option<MaterializedChat>, String> {
     let events = state.events.clone();
     let evts = events.read_chat(&chat_id).map_err(|e| e.to_string())?;
-    Ok(materialize(evts))
+    // Phase 3: decrypt protected content if this chat is currently unlocked.
+    let key = state.keystore.key_for(&chat_id);
+    Ok(crate::storage::materialize::materialize_with_key(
+        evts,
+        key.as_ref(),
+    ))
+}
+
+/// Phase 3: derive the per-chat key from `pin` + the chat's `protectionSalt` and
+/// cache it. Verifies correctness by trying to decrypt the first encrypted event in
+/// the chat — returns `false` on a wrong PIN. If the chat has no encrypted events
+/// yet (just marked protected, nothing authored remotely), the key is cached
+/// optimistically and `true` is returned.
+#[tauri::command]
+pub async fn unlock_chat(
+    state: State<'_, AppState>,
+    chat_id: String,
+    pin: String,
+) -> Result<bool, String> {
+    let evts = state
+        .events
+        .read_chat(&chat_id)
+        .map_err(|e| e.to_string())?;
+
+    // Find the chat's protectionSalt from the latest ChatMetadataChanged.
+    let salt = evts
+        .iter()
+        .filter(|e| e.op_type == op_type::CHAT_METADATA_CHANGED)
+        .max_by(|a, b| a.hlc.cmp(&b.hlc))
+        .and_then(|e| {
+            e.payload
+                .get("protectionSalt")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .ok_or_else(|| "chat has no protection salt".to_string())?;
+
+    let key = crate::sync::protection::derive_key(&pin, &salt).map_err(|e| e.to_string())?;
+
+    // Verify against the first encrypted message event, if any exists.
+    let sample = evts.iter().find(|e| {
+        matches!(
+            e.op_type.as_str(),
+            op_type::MESSAGE_CREATED | op_type::MESSAGE_EDITED
+        ) && e.payload.get("enc").is_some()
+    });
+    let verified = match sample {
+        Some(ev) => crate::sync::protection::open_envelope(&ev.payload, &key).is_some(),
+        None => true, // nothing to check against — trust optimistically
+    };
+    if !verified {
+        return Ok(false);
+    }
+    state.keystore.unlock(&chat_id, key);
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn lock_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String> {
+    state.keystore.lock(&chat_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -356,6 +416,63 @@ pub async fn author_edit_text(
     Ok(())
 }
 
+/// Author a checklist message. Items arrive as plain strings (one per checklist row);
+/// the command wraps each in a `ChecklistItem` with a fresh UUID and `checked = false`,
+/// then emits a `MessageCreated` event with type=CHECKLIST. Phone uses the same shape.
+#[tauri::command]
+pub async fn author_send_checklist(
+    state: State<'_, AppState>,
+    chat_id: String,
+    items: Vec<String>,
+) -> Result<(), String> {
+    let cleaned: Vec<crate::model::ChecklistItem> = items
+        .into_iter()
+        .filter_map(|raw| {
+            let t = raw.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(crate::model::ChecklistItem {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    text: t.to_string(),
+                    checked: false,
+                })
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        return Err("checklist has no items".into());
+    }
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content: vec![],
+        voice_file: None,
+        voice_duration_ms: None,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::Checklist,
+        is_starred: false,
+        image_files: vec![],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: cleaned,
+    };
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_CREATED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn author_delete_message(
     state: State<'_, AppState>,
@@ -371,6 +488,122 @@ pub async fn author_delete_message(
         &state.identity_device_id,
         &chat_id,
         op_type::MESSAGE_TOMBSTONED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Author a fully-formatted message — the frontend builds the `RichTextBlock` array
+/// (typically by running its own light Markdown parser on the compose box) and the
+/// Rust side just wraps it in a `Message` and emits a `MessageCreated` event.
+///
+/// Coexists with [author_send_text] which remains for callers that only need
+/// plaintext and don't want to build the block array themselves.
+#[tauri::command]
+pub async fn author_send_message(
+    state: State<'_, AppState>,
+    chat_id: String,
+    content: Vec<RichTextBlock>,
+) -> Result<(), String> {
+    // Reject if the entire payload would render as empty text — same guard as
+    // author_send_text but applied to the assembled rich content.
+    let any_text = content
+        .iter()
+        .flat_map(|b| b.spans.iter())
+        .any(|s| !s.text.trim().is_empty() || s.inline_image.is_some());
+    if !any_text {
+        return Err("empty message".to_string());
+    }
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content,
+        voice_file: None,
+        voice_duration_ms: None,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::Text,
+        is_starred: false,
+        image_files: vec![],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: vec![],
+    };
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_CREATED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Attach an image from a local file path. Reads the bytes, hashes them, persists
+/// the blob into the desktop's BlobStore (so the phone can fetch it via the existing
+/// `BlobRequest` flow), then emits a `MessageCreated` event with the same on-the-wire
+/// shape the phone authors for image messages (type=IMAGE, content with a single
+/// span carrying `inlineImage = "images/<hash>.jpg"`).
+#[tauri::command]
+pub async fn author_send_image(
+    state: State<'_, AppState>,
+    chat_id: String,
+    source_path: String,
+) -> Result<(), String> {
+    let bytes = std::fs::read(&source_path)
+        .map_err(|e| format!("read source: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty image file".into());
+    }
+    let hash = crate::sync::blob::sha256_hex(&bytes);
+    state
+        .blobs
+        .write_verified(&hash, "image", &bytes)
+        .map_err(|e| format!("persist blob: {e}"))?;
+
+    let reference = format!("images/{}.jpg", hash);
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content: vec![RichTextBlock {
+            block_type: BlockType::Paragraph,
+            spans: vec![RichTextSpan {
+                text: String::new(),
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false,
+                color: None,
+                link: None,
+                inline_image: Some(reference),
+            }],
+        }],
+        voice_file: None,
+        voice_duration_ms: None,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::Image,
+        is_starred: false,
+        image_files: vec![],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: vec![],
+    };
+    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::MESSAGE_CREATED,
         payload,
     )
     .map_err(|e| e.to_string())?;

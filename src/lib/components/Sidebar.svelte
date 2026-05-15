@@ -1,9 +1,10 @@
 <script lang="ts">
   import { activeView, serverStatus, connectedPeers, identity, pairings } from "../stores/app";
 
-  type View = "chats" | "starred" | "reminders" | "pairing" | "settings";
+  type View = "chats" | "search" | "starred" | "reminders" | "pairing" | "settings";
   const items: { key: View; label: string; icon: string }[] = [
     { key: "chats", label: "Chats", icon: "💬" },
+    { key: "search", label: "Search", icon: "🔎" },
     { key: "starred", label: "Starred", icon: "⭐" },
     { key: "reminders", label: "Reminders", icon: "⏰" },
     { key: "pairing", label: "Devices", icon: "🔗" },

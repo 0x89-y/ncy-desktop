@@ -24,4 +24,9 @@ pub struct ChatMetadata {
     pub is_protected: bool,
     #[serde(default, rename = "hideName")]
     pub hide_name: bool,
+    /// Phase 3: per-chat random salt for PBKDF2-derived encryption key. Plaintext on
+    /// the wire (salts aren't secrets); only the PIN is. `None` for non-protected
+    /// chats and for pre-phase-3 chats authored before the field existed.
+    #[serde(default, rename = "protectionSalt")]
+    pub protection_salt: Option<String>,
 }

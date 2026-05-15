@@ -98,12 +98,13 @@ fn is_valid_hash(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Pull every (hash, mediaType) reference out of a `MessageCreated` / `MessageEdited`
-/// payload. Returns dedup'd, lowercase hex hashes — matches the phone's
-/// `MediaHash.extractHash` on what the wire actually carries.
+/// Pull every (hash, mediaType) reference out of an event payload (`MessageCreated`,
+/// `MessageEdited`, or `ChatMetadataChanged`). Returns dedup'd, lowercase hex hashes
+/// — matches the phone's `MediaHash.extractHash` on what the wire actually carries.
 pub fn extract_media_refs(payload: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
 
+    // Message-shaped payloads.
     if let Some(s) = payload.get("voiceFile").and_then(|v| v.as_str()) {
         if let Some(h) = extract_hash(s) {
             out.push((h, "voice".into()));
@@ -131,6 +132,19 @@ pub fn extract_media_refs(payload: &Value) -> Vec<(String, String)> {
                     }
                 }
             }
+        }
+    }
+
+    // ChatMetadata-shaped payloads (phase 2b slice 2): pull the avatar (and the
+    // background, even though no client currently renders it — cheap, future-proof).
+    if let Some(s) = payload.get("avatarFile").and_then(|v| v.as_str()) {
+        if let Some(h) = extract_hash(s) {
+            out.push((h, "image".into()));
+        }
+    }
+    if let Some(s) = payload.get("backgroundFile").and_then(|v| v.as_str()) {
+        if let Some(h) = extract_hash(s) {
+            out.push((h, "image".into()));
         }
     }
 

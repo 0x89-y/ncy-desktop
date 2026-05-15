@@ -48,7 +48,7 @@
       {#each hits as h (h.message.id)}
         <li class="card hit">
           <button class="row chat-row" onclick={() => open(h.chat.id)}>
-            <Avatar name={h.chat.name} size={28} />
+            <Avatar name={h.chat.name} size={28} avatarFile={h.chat.avatarFile} />
             <strong>{h.chat.name}</strong>
             <span class="muted tiny spacer">{formatFullTime(h.message.createdAt)}</span>
           </button>

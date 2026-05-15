@@ -15,7 +15,7 @@
 </script>
 
 <button class="row-btn" class:selected onclick={onclick}>
-  <Avatar name={chat.name} size={44} />
+  <Avatar name={chat.name} size={44} avatarFile={chat.avatarFile} />
   <div class="middle">
     <div class="row top">
       <span class="title" title={chat.name}>

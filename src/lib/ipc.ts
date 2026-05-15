@@ -82,6 +82,9 @@ export type MaterializedChat = {
   messages: Message[];
   lastMessageAt: number | null;
   lastMessagePreview: string | null;
+  /** Phase 3: false when the chat is protected and no key is cached on the desktop
+   *  — message bodies are `🔒` placeholders and the UI should show the PIN prompt. */
+  isUnlocked: boolean;
 };
 
 export type Pairing = {
@@ -152,10 +155,21 @@ export const api = {
     invoke<void>("author_edit_text", { chatId, messageId, text }),
   authorDeleteMessage: (chatId: string, messageId: string) =>
     invoke<void>("author_delete_message", { chatId, messageId }),
+  authorSendImage: (chatId: string, sourcePath: string) =>
+    invoke<void>("author_send_image", { chatId, sourcePath }),
+  authorSendChecklist: (chatId: string, items: string[]) =>
+    invoke<void>("author_send_checklist", { chatId, items }),
+  authorSendMessage: (chatId: string, content: RichTextBlock[]) =>
+    invoke<void>("author_send_message", { chatId, content }),
 
   // Phase 2b — content-addressed media blobs.
   readBlob: (hash: string, mediaType: MediaType) =>
     invoke<string | null>("read_blob", { hash, mediaType }),
+
+  // Phase 3 — protected-chat unlock. `unlockChat` returns false on a wrong PIN.
+  unlockChat: (chatId: string, pin: string) =>
+    invoke<boolean>("unlock_chat", { chatId, pin }),
+  lockChat: (chatId: string) => invoke<void>("lock_chat", { chatId }),
 };
 
 /**

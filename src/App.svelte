@@ -5,6 +5,7 @@
   import ChatList from "./lib/components/ChatList.svelte";
   import ChatView from "./lib/components/ChatView.svelte";
   import PairingView from "./lib/views/PairingView.svelte";
+  import SearchView from "./lib/views/SearchView.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import StarredView from "./lib/views/StarredView.svelte";
   import RemindersView from "./lib/views/RemindersView.svelte";
@@ -44,6 +45,8 @@
         <ChatView />
       </div>
     </div>
+  {:else if $activeView === "search"}
+    <SearchView />
   {:else if $activeView === "starred"}
     <StarredView />
   {:else if $activeView === "reminders"}

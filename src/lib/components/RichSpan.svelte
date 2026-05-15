@@ -1,5 +1,7 @@
 <script lang="ts">
-  import type { RichTextSpan } from "../ipc";
+  import { extractMediaHash, type RichTextSpan } from "../ipc";
+  import BlobImage from "./BlobImage.svelte";
+
   let { span }: { span: RichTextSpan } = $props();
 
   const style = $derived.by(() => {
@@ -13,10 +15,28 @@
     if (span.color) parts.push(`color:${span.color}`);
     return parts.join(";");
   });
+
+  // Content-addressed inline image: pull the SHA-256 out of the reference; render
+  // via BlobImage. Legacy random-named inline images (pre-phase-2b) fall through
+  // to text rendering since they can't be fetched over the wire anyway.
+  const inlineHash = $derived(extractMediaHash(span.inlineImage));
 </script>
 
-{#if span.link}
+{#if inlineHash}
+  <BlobImage hash={inlineHash} mediaType="image" klass="inline-image" />
+  {#if span.text}<span {style}>{span.text}</span>{/if}
+{:else if span.link}
   <a href={span.link} target="_blank" rel="noreferrer" {style}>{span.text}</a>
 {:else}
   <span {style}>{span.text}</span>
 {/if}
+
+<style>
+  :global(.inline-image) {
+    display: inline-block;
+    max-width: 100%;
+    max-height: 280px;
+    vertical-align: middle;
+    margin: 0.15rem 0;
+  }
+</style>

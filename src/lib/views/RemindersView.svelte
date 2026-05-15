@@ -70,7 +70,7 @@
           {#each upcoming as h (h.message.id)}
             <li>
               <button type="button" class="card row item" onclick={() => open(h.chat.id)}>
-                <Avatar name={h.chat.name} size={32} />
+                <Avatar name={h.chat.name} size={32} avatarFile={h.chat.avatarFile} />
                 <div class="col" style="flex:1; min-width:0;">
                   <strong>{h.chat.name}</strong>
                   <span class="muted tiny preview">{preview(h.message)}</span>
@@ -90,7 +90,7 @@
           {#each past as h (h.message.id)}
             <li>
               <button type="button" class="card row item past" onclick={() => open(h.chat.id)}>
-                <Avatar name={h.chat.name} size={32} />
+                <Avatar name={h.chat.name} size={32} avatarFile={h.chat.avatarFile} />
                 <div class="col" style="flex:1; min-width:0;">
                   <strong>{h.chat.name}</strong>
                   <span class="muted tiny preview">{preview(h.message)}</span>

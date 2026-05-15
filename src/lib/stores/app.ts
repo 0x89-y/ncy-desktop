@@ -1,5 +1,11 @@
 import { writable, derived, get } from "svelte/store";
 import { api, type ChatSummary, type MaterializedChat, type AppSettings, type PairingDescriptor, type SyncEventPayload, type DeviceIdentityView } from "../ipc";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 export const chats = writable<ChatSummary[]>([]);
 export const activeChatId = writable<string | null>(null);
@@ -19,7 +25,7 @@ export const arrivedBlobs = writable<Set<string>>(new Set());
 
 export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
-export const activeView = writable<"chats" | "starred" | "reminders" | "pairing" | "settings">("chats");
+export const activeView = writable<"chats" | "search" | "starred" | "reminders" | "pairing" | "settings">("chats");
 export const activeTag = writable<string | null>(null);
 
 export async function refreshChats() {
@@ -60,6 +66,50 @@ export async function refreshLanIps() {
   advertisedHost.set(await api.getAdvertisedHost());
 }
 
+/**
+ * Permission state for system notifications. Probed lazily on first use so we don't
+ * trigger the OS prompt on launch.
+ */
+let notifPermissionResolved: Promise<boolean> | null = null;
+async function ensureNotificationPermission(): Promise<boolean> {
+  if (notifPermissionResolved) return notifPermissionResolved;
+  notifPermissionResolved = (async () => {
+    try {
+      if (await isPermissionGranted()) return true;
+      const next = await requestPermission();
+      return next === "granted";
+    } catch {
+      return false;
+    }
+  })();
+  return notifPermissionResolved;
+}
+
+async function maybeNotify(chatId: string) {
+  // Don't fire if the user is already looking at the desktop.
+  try {
+    if (await getCurrentWindow().isFocused()) return;
+  } catch {
+    return;
+  }
+  // Skip notifications for the active chat anyway — they'd be redundant noise.
+  if (get(activeChatId) === chatId) return;
+
+  const chat = get(chats).find((c) => c.id === chatId);
+  if (!chat) return;
+  // Protected chats: don't leak content through the notification body.
+  const body = chat.isProtected
+    ? "New message"
+    : (chat.lastMessagePreview ?? "New message");
+
+  if (!(await ensureNotificationPermission())) return;
+  try {
+    sendNotification({ title: chat.name, body });
+  } catch {
+    /* swallow — notification failure shouldn't break the event handler */
+  }
+}
+
 export async function bootstrap() {
   await Promise.all([
     refreshChats(),
@@ -95,6 +145,14 @@ export async function bootstrap() {
         });
         break;
       case "event-received":
+        await refreshChats();
+        if (get(activeChatId) === ev.chatId) {
+          await refreshActiveChat();
+        }
+        // Only inbound events trigger notifications; locally-authored ones never do.
+        // `refreshChats` ran first so `maybeNotify` reads the fresh preview.
+        void maybeNotify(ev.chatId);
+        break;
       case "event-authored":
         await refreshChats();
         if (get(activeChatId) === ev.chatId) {
