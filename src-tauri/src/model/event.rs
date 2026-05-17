@@ -20,6 +20,12 @@ pub struct ChatEventWire {
     pub origin_device: String,
     #[serde(rename = "chatId")]
     pub chat_id: String,
+    /// Profile sync: which phone profile this chat belongs to + its display name.
+    /// Defaults to empty for pre-profile-sync events (a single "default" bucket).
+    #[serde(default, rename = "profileId")]
+    pub profile_id: String,
+    #[serde(default, rename = "profileName")]
+    pub profile_name: String,
     pub payload: Value,
 }
 

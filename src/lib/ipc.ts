@@ -16,6 +16,10 @@ export type ChatSummary = {
   bubbleColor: string | null;
   bubbleGradient: boolean;
   hideName: boolean;
+  /** Profile sync: which phone profile this chat belongs to (+ display name).
+   *  Empty string for pre-profile-sync chats (a single "default" bucket). */
+  profileId: string;
+  profileName: string;
 };
 
 export type RichTextSpan = {
@@ -85,6 +89,9 @@ export type MaterializedChat = {
   /** Phase 3: false when the chat is protected and no key is cached on the desktop
    *  — message bodies are `🔒` placeholders and the UI should show the PIN prompt. */
   isUnlocked: boolean;
+  /** Profile sync: which phone profile this chat belongs to (+ display name). */
+  profileId: string;
+  profileName: string;
 };
 
 export type Pairing = {
@@ -143,6 +150,8 @@ export const api = {
     invoke<void>("set_advertised_host", { host }),
   getAdvertisedHost: () => invoke<string>("get_advertised_host"),
   getDeviceIdentity: () => invoke<DeviceIdentityView>("get_device_identity"),
+  getServerStatus: () =>
+    invoke<{ status: string; addr: string | null }>("get_server_status"),
   onSyncEvent: (cb: (ev: SyncEventPayload) => void): Promise<UnlistenFn> =>
     listen<SyncEventPayload>("sync-event", (e) => cb(e.payload)),
 
@@ -159,6 +168,19 @@ export const api = {
     invoke<void>("author_send_image", { chatId, sourcePath }),
   authorSendChecklist: (chatId: string, items: string[]) =>
     invoke<void>("author_send_checklist", { chatId, items }),
+  authorUpdateChatMeta: (
+    chatId: string,
+    patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[] },
+  ) =>
+    invoke<void>("author_update_chat_meta", {
+      chatId,
+      name: patch.name ?? null,
+      isPinned: patch.isPinned ?? null,
+      isArchived: patch.isArchived ?? null,
+      tags: patch.tags ?? null,
+    }),
+  authorDeleteChat: (chatId: string) =>
+    invoke<void>("author_delete_chat", { chatId }),
   authorSendMessage: (chatId: string, content: RichTextBlock[]) =>
     invoke<void>("author_send_message", { chatId, content }),
 

@@ -100,6 +100,28 @@ impl EventStore {
         Ok(true)
     }
 
+    /// Atomically replace a chat's whole log with `events` (temp file + rename).
+    /// Used by chat deletion to collapse the log to just the tombstone, mirroring
+    /// the phone's `EventLog.replaceAll`. The `seen` dedup set is left as-is: any
+    /// retained event ids stay known, and dropped ids simply won't be re-appended.
+    pub fn replace_chat(&self, chat_id: &str, events: &[ChatEventWire]) -> Result<()> {
+        let lock = self.lock_for(chat_id);
+        let _guard = lock.lock().unwrap();
+        let path = self.path_for(chat_id);
+        let tmp = path.with_extension("ndjson.tmp");
+        {
+            let mut f = File::create(&tmp).with_context(|| format!("create {:?}", tmp))?;
+            for ev in events {
+                let line = serde_json::to_string(ev)?;
+                f.write_all(line.as_bytes())?;
+                f.write_all(b"\n")?;
+            }
+            f.flush()?;
+        }
+        fs::rename(&tmp, &path).with_context(|| format!("rename {:?} -> {:?}", tmp, path))?;
+        Ok(())
+    }
+
     pub fn read_chat(&self, chat_id: &str) -> Result<Vec<ChatEventWire>> {
         let path = self.path_for(chat_id);
         if !path.exists() {

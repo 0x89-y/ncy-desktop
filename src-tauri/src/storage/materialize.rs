@@ -21,6 +21,12 @@ pub struct MaterializedChat {
     /// The frontend uses this to decide whether to show the PIN overlay.
     #[serde(rename = "isUnlocked")]
     pub is_unlocked: bool,
+    /// Profile sync: which phone profile this chat belongs to (+ display name),
+    /// from the chat's highest-HLC stamped event. Empty for pre-profile-sync chats.
+    #[serde(rename = "profileId")]
+    pub profile_id: String,
+    #[serde(rename = "profileName")]
+    pub profile_name: String,
 }
 
 /// Pure function `events → ChatData?` matching protocol §10.4. Encrypted payloads
@@ -56,8 +62,15 @@ pub fn materialize_with_key(
     let mut index: HashMap<String, usize> = HashMap::new();
     let mut tombstoned: BTreeSet<String> = BTreeSet::new();
     let mut chat_tombstoned = false;
+    // Events are HLC-ascending, so the last non-empty stamp seen is the latest.
+    let mut profile_id = String::new();
+    let mut profile_name = String::new();
 
     for ev in events {
+        if !ev.profile_id.is_empty() {
+            profile_id = ev.profile_id.clone();
+            profile_name = ev.profile_name.clone();
+        }
         match ev.op_type.as_str() {
             op_type::CHAT_TOMBSTONED => {
                 chat_tombstoned = true;
@@ -132,6 +145,8 @@ pub fn materialize_with_key(
         last_message_at,
         last_message_preview,
         is_unlocked: key.is_some(),
+        profile_id,
+        profile_name,
     })
 }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { activeChatId, visibleChats, selectChat, filterText, showArchived, allTags, activeTag } from "../stores/app";
+  import { activeChatId, visibleChats, selectChat, filterText, showArchived, allTags, activeTag, profileBuckets, activeProfileId } from "../stores/app";
   import ChatListItem from "./ChatListItem.svelte";
 
   let filter = $state("");
@@ -10,9 +10,31 @@
   function setTag(t: string | null) {
     activeTag.set(t);
   }
+
+  function setProfile(id: string | null) {
+    activeProfileId.set(id);
+  }
 </script>
 
 <div class="wrap col">
+  {#if $profileBuckets.length > 1}
+    <div class="row profiles">
+      <button
+        class="chip"
+        class:active={$activeProfileId === null}
+        onclick={() => setProfile(null)}
+      >All</button>
+      {#each $profileBuckets as p (p.id)}
+        <button
+          class="chip"
+          class:active={$activeProfileId === p.id}
+          onclick={() => setProfile(p.id)}
+          title={p.name}
+        >{p.name}</button>
+      {/each}
+    </div>
+  {/if}
+
   <div class="row controls">
     <input
       type="search"
@@ -73,6 +95,19 @@
     flex-wrap: wrap;
     gap: .25rem;
     padding: 0 .25rem .25rem;
+  }
+  .profiles {
+    flex-wrap: wrap;
+    gap: .25rem;
+    padding: 0 .25rem .25rem;
+    border-bottom: 1px solid var(--outline-variant);
+    margin-bottom: .25rem;
+  }
+  .profiles .chip {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .chip {
     cursor: pointer;

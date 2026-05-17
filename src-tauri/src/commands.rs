@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::model::event::op_type;
-use crate::model::{BlockType, Message, MessageType, RichTextBlock, RichTextSpan};
+use crate::model::{BlockType, ChatMetadata, Message, MessageType, RichTextBlock, RichTextSpan};
 use crate::storage::{
     materialize, now_ms, save_pairings, AppSettings, EventStore, MaterializedChat, Pairing,
 };
@@ -38,6 +38,10 @@ pub struct ChatSummary {
     pub bubble_gradient: bool,
     #[serde(rename = "hideName")]
     pub hide_name: bool,
+    #[serde(rename = "profileId")]
+    pub profile_id: String,
+    #[serde(rename = "profileName")]
+    pub profile_name: String,
 }
 
 impl ChatSummary {
@@ -57,6 +61,8 @@ impl ChatSummary {
             bubble_color: m.metadata.bubble_color.clone(),
             bubble_gradient: m.metadata.bubble_gradient,
             hide_name: m.metadata.hide_name,
+            profile_id: m.profile_id.clone(),
+            profile_name: m.profile_name.clone(),
         }
     }
 }
@@ -285,6 +291,23 @@ pub struct DeviceIdentityView {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerStatusView {
+    pub status: String,
+    pub addr: Option<String>,
+}
+
+/// Read the current WS server status directly (not via the one-shot bus event).
+/// The frontend calls this on bootstrap so a listener attached after
+/// `ServerStarted` already fired still shows the right state.
+#[tauri::command]
+pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatusView, String> {
+    Ok(ServerStatusView {
+        status: state.server_status.read().await.to_string(),
+        addr: state.server_addr.read().await.clone(),
+    })
+}
+
 // ---------- Phase 2a.2 authoring commands ----------
 
 fn current_message(events: &EventStore, chat_id: &str, message_id: &str) -> Result<Message, String> {
@@ -470,6 +493,95 @@ pub async fn author_send_checklist(
         payload,
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Current chat metadata (the latest `ChatMetadataChanged`, via the materializer).
+/// Errors if the chat is gone/tombstoned so callers don't resurrect it.
+fn current_metadata(events: &EventStore, chat_id: &str) -> Result<ChatMetadata, String> {
+    let evts = events.read_chat(chat_id).map_err(|e| e.to_string())?;
+    materialize(evts)
+        .map(|m| m.metadata)
+        .ok_or_else(|| "chat not found".to_string())
+}
+
+/// Patch chat-level metadata from the desktop and sync it back. Only the provided
+/// fields change; everything else (avatar, background, protection salt, isProtected,
+/// createdAt, bubble style, hideName) is preserved — important because
+/// `ChatMetadataChanged` is whole-record LWW, so dropping a field would wipe it on
+/// the phone.
+#[tauri::command]
+pub async fn author_update_chat_meta(
+    state: State<'_, AppState>,
+    chat_id: String,
+    name: Option<String>,
+    is_pinned: Option<bool>,
+    is_archived: Option<bool>,
+    tags: Option<Vec<String>>,
+) -> Result<(), String> {
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    if let Some(n) = name {
+        let n = n.trim();
+        if n.is_empty() {
+            return Err("name cannot be empty".into());
+        }
+        meta.name = n.to_string();
+    }
+    if let Some(p) = is_pinned {
+        meta.is_pinned = p;
+    }
+    if let Some(a) = is_archived {
+        meta.is_archived = a;
+    }
+    if let Some(t) = tags {
+        meta.tags = t
+            .into_iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Delete a chat from the desktop. Emits a `ChatTombstoned` (delete-wins, syncs to
+/// the phone) then collapses this chat's local log to just that tombstone — same
+/// shape as the phone's `deleteChat`, so there's nothing left to read on disk but
+/// the deletion still propagates to offline peers via catchup.
+#[tauri::command]
+pub async fn author_delete_chat(
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<(), String> {
+    // Refuse if already gone, so we don't append a tombstone to a dead chat.
+    current_metadata(&state.events, &chat_id)?;
+    let payload = serde_json::json!({ "chatId": chat_id });
+    let wire = author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_TOMBSTONED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    state
+        .events
+        .replace_chat(&chat_id, std::slice::from_ref(&wire))
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

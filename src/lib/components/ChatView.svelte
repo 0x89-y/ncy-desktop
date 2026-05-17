@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { activeChat, refreshActiveChat, refreshChats } from "../stores/app";
+  import { activeChat, refreshActiveChat, refreshChats, selectChat } from "../stores/app";
   import { api, extractMediaHash } from "../ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
@@ -185,6 +185,93 @@
     await refreshChats();
   }
 
+  // ----- Chat management (rename / pin / archive / tags / delete) -----
+  let menuOpen = $state(false);
+  // null = menu only; "rename"/"tags" = an inline editor is showing.
+  let editMode = $state<null | "rename" | "tags">(null);
+  let editValue = $state("");
+  let metaBusy = $state(false);
+
+  function openEditor(mode: "rename" | "tags") {
+    const c = $activeChat;
+    if (!c) return;
+    editValue =
+      mode === "rename"
+        ? c.metadata.name
+        : c.metadata.tags.join(", ");
+    editMode = mode;
+    menuOpen = false;
+  }
+
+  function cancelEdit() {
+    editMode = null;
+    editValue = "";
+  }
+
+  async function runMeta(patch: {
+    name?: string;
+    isPinned?: boolean;
+    isArchived?: boolean;
+    tags?: string[];
+  }) {
+    const c = $activeChat;
+    if (!c || metaBusy) return;
+    metaBusy = true;
+    try {
+      await api.authorUpdateChatMeta(c.metadata.id, patch);
+      await refreshActiveChat();
+      await refreshChats();
+    } catch (e) {
+      console.error("update chat meta failed", e);
+    } finally {
+      metaBusy = false;
+    }
+  }
+
+  async function saveEditor() {
+    const v = editValue.trim();
+    if (editMode === "rename") {
+      if (!v) return;
+      await runMeta({ name: v });
+    } else if (editMode === "tags") {
+      await runMeta({ tags: v.split(",").map((t) => t.trim()).filter(Boolean) });
+    }
+    cancelEdit();
+  }
+
+  async function togglePin() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    await runMeta({ isPinned: !c.metadata.isPinned });
+  }
+
+  async function toggleArchive() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    await runMeta({ isArchived: !c.metadata.isArchived });
+  }
+
+  async function deleteChat() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    if (
+      !confirm(
+        `Delete "${c.metadata.name}"? This removes it on every paired device and can't be undone.`,
+      )
+    )
+      return;
+    try {
+      await api.authorDeleteChat(c.metadata.id);
+      await selectChat(null);
+      await refreshChats();
+    } catch (e) {
+      console.error("delete chat failed", e);
+    }
+  }
+
   async function attachImage() {
     const c = $activeChat;
     if (!c || sending) return;
@@ -242,7 +329,47 @@
           🔓 Lock
         </button>
       {/if}
+      <div class="menu-wrap">
+        <button
+          type="button"
+          class="menu-btn"
+          title="Chat options"
+          onclick={() => { menuOpen = !menuOpen; }}
+        >⋯</button>
+        {#if menuOpen}
+          <div class="menu" role="menu">
+            <button type="button" onclick={() => openEditor("rename")}>Rename…</button>
+            <button type="button" onclick={togglePin}>
+              {chat.metadata.isPinned ? "Unpin" : "Pin"}
+            </button>
+            <button type="button" onclick={toggleArchive}>
+              {chat.metadata.isArchived ? "Unarchive" : "Archive"}
+            </button>
+            <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
+            <button type="button" class="danger" onclick={deleteChat}>Delete chat</button>
+          </div>
+        {/if}
+      </div>
     </header>
+
+    {#if editMode}
+      <div class="meta-editor">
+        <input
+          class="meta-input"
+          placeholder={editMode === "rename" ? "Chat name" : "tag1, tag2, tag3"}
+          bind:value={editValue}
+          onkeydown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void saveEditor(); }
+            if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+          }}
+          disabled={metaBusy}
+        />
+        <button type="button" class="send" onclick={saveEditor} disabled={metaBusy}>
+          {metaBusy ? "…" : "Save"}
+        </button>
+        <button type="button" class="text-btn" onclick={cancelEdit}>Cancel</button>
+      </div>
+    {/if}
 
     {#if chat.metadata.isProtected && !chat.isUnlocked}
       <div class="lock-screen">
@@ -606,4 +733,63 @@
     align-self: center;
   }
   .lock-btn:hover { background: var(--surface-2, var(--surface)); }
+  .menu-wrap { position: relative; }
+  .menu-btn {
+    background: transparent;
+    border: 1px solid var(--outline-variant);
+    color: inherit;
+    font: inherit;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: .25rem .55rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .menu-btn:hover { background: var(--surface-2, var(--surface)); }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + .35rem);
+    z-index: 20;
+    min-width: 160px;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--outline-variant);
+    border-radius: 12px;
+    box-shadow: var(--shadow, 0 6px 24px rgba(0,0,0,.25));
+    overflow: hidden;
+  }
+  .menu button {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: .55rem .8rem;
+    cursor: pointer;
+  }
+  .menu button:hover { background: var(--surface-2, var(--surface)); }
+  .menu button.danger { color: var(--error, #b00); }
+  .meta-editor {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .55rem .75rem;
+    border-bottom: 1px solid var(--outline-variant);
+    background: var(--surface);
+  }
+  .meta-input {
+    flex: 1;
+    padding: .45rem .6rem;
+    border-radius: 10px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface-2, var(--surface));
+    color: inherit;
+    font: inherit;
+  }
+  .meta-input:focus {
+    outline: 2px solid color-mix(in oklab, var(--accent, currentColor) 35%, transparent);
+    outline-offset: 0;
+  }
 </style>

@@ -34,6 +34,10 @@ pub struct AppState {
     pub blobs: Arc<BlobStore>,
     /// Phase 3: in-memory per-chat decryption keys, derived from the PIN on unlock.
     pub keystore: Arc<ProtectionKeyStore>,
+    /// Queryable WS server status — closes the startup race where the webview
+    /// attaches its `sync-event` listener after `ServerStarted` already fired.
+    pub server_status: Arc<RwLock<&'static str>>,
+    pub server_addr: Arc<RwLock<Option<String>>>,
     /// Holds the mDNS-SD registration alive for the lifetime of the app. Drop unregisters.
     pub _mdns: Option<MdnsRegistration>,
 }
@@ -110,6 +114,9 @@ pub fn run() {
             })
             .ok();
 
+            let server_status = Arc::new(RwLock::new("starting"));
+            let server_addr = Arc::new(RwLock::new(None::<String>));
+
             let state = AppState {
                 paths,
                 identity_device_id: identity.device_id.clone(),
@@ -122,6 +129,8 @@ pub fn run() {
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
                 keystore: Arc::new(ProtectionKeyStore::new()),
+                server_status: server_status.clone(),
+                server_addr: server_addr.clone(),
                 _mdns: mdns,
             };
 
@@ -134,6 +143,9 @@ pub fn run() {
             let clock_for_server = clock.clone();
             let outbound_for_server = outbound.clone();
             let blobs_for_server = blobs.clone();
+            let status_for_server = server_status.clone();
+            let addr_for_server = server_addr.clone();
+            let status_for_err = server_status.clone();
 
             // Spawn the WS server on the Tauri-managed Tokio runtime.
             tauri::async_runtime::spawn(async move {
@@ -147,10 +159,13 @@ pub fn run() {
                     clock: clock_for_server,
                     outbound: outbound_for_server,
                     blobs: blobs_for_server,
+                    server_status: status_for_server,
+                    server_addr: addr_for_server,
                 });
                 let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
                 if let Err(e) = run_server(ctx, addr).await {
                     tracing::error!("sync server fatal: {e}");
+                    *status_for_err.write().await = "error";
                     let _ = bus_clone.send(SyncEvent::ServerError {
                         message: e.to_string(),
                     });
@@ -209,6 +224,7 @@ pub fn run() {
             commands::set_advertised_host,
             commands::get_advertised_host,
             commands::get_device_identity,
+            commands::get_server_status,
             commands::author_send_text,
             commands::author_send_message,
             commands::author_toggle_star,
@@ -216,6 +232,8 @@ pub fn run() {
             commands::author_delete_message,
             commands::author_send_image,
             commands::author_send_checklist,
+            commands::author_update_chat_meta,
+            commands::author_delete_chat,
             commands::read_blob,
             commands::unlock_chat,
             commands::lock_chat,

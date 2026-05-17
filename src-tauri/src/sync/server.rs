@@ -72,6 +72,11 @@ pub struct ServerContext {
     pub clock: Arc<DesktopClock>,
     pub outbound: OutboundTx,
     pub blobs: Arc<BlobStore>,
+    /// Queryable server status, so a webview that attaches its event listener after
+    /// the one-shot `ServerStarted` already fired can still read the live state
+    /// (`"starting"` | `"running"` | `"error"`) plus the bound address.
+    pub server_status: Arc<RwLock<&'static str>>,
+    pub server_addr: Arc<RwLock<Option<String>>>,
 }
 
 pub async fn run(ctx: Arc<ServerContext>, addr: SocketAddr) -> Result<()> {
@@ -79,6 +84,8 @@ pub async fn run(ctx: Arc<ServerContext>, addr: SocketAddr) -> Result<()> {
         .await
         .with_context(|| format!("bind {addr}"))?;
     let bound = listener.local_addr().unwrap_or(addr);
+    *ctx.server_status.write().await = "running";
+    *ctx.server_addr.write().await = Some(bound.to_string());
     let _ = ctx.bus.send(SyncEvent::ServerStarted {
         addr: bound.to_string(),
     });

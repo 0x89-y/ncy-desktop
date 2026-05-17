@@ -27,6 +27,10 @@ export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
 export const activeView = writable<"chats" | "search" | "starred" | "reminders" | "pairing" | "settings">("chats");
 export const activeTag = writable<string | null>(null);
+/** Profile sync: which phone profile the chat list is scoped to.
+ *  `null` = all profiles, `""` = the legacy/pre-profile-sync "Default" bucket,
+ *  any other value = that profile's id. */
+export const activeProfileId = writable<string | null>(null);
 
 export async function refreshChats() {
   const list = await api.listChats();
@@ -168,13 +172,55 @@ export async function bootstrap() {
         break;
     }
   });
+
+  // The `server-started` bus event almost always fires before this listener is
+  // attached (Rust binds the socket during setup, the webview boots later, and
+  // Tauri events aren't buffered for late listeners). So read the current status
+  // directly once; the live events above keep it updated on later transitions.
+  try {
+    const s = await api.getServerStatus();
+    if (s.status === "running") {
+      serverStatus.set("running");
+      if (s.addr) serverAddr.set(s.addr);
+    } else if (s.status === "error") {
+      serverStatus.set("error");
+    }
+  } catch {
+    /* leave as "starting"; a later bus event may still correct it */
+  }
 }
 
+/**
+ * Selectable profile buckets derived from the synced chats. Named profiles come
+ * from the phone (profileId + display name); the "Default" bucket collects any
+ * legacy/pre-profile-sync chats that synced with an empty profile id. The
+ * switcher UI only renders this when there's more than one bucket.
+ */
+export const profileBuckets = derived(chats, ($chats) => {
+  const named = new Map<string, string>();
+  let hasDefault = false;
+  for (const c of $chats) {
+    if (c.profileId) {
+      if (!named.has(c.profileId)) {
+        named.set(c.profileId, c.profileName || c.profileId.slice(0, 6));
+      }
+    } else {
+      hasDefault = true;
+    }
+  }
+  const list = Array.from(named, ([id, name]) => ({ id, name })).sort((a, b) =>
+    a.name.localeCompare(b.name)
+  );
+  if (hasDefault) list.push({ id: "", name: "Default" });
+  return list;
+});
+
 export const visibleChats = derived(
-  [chats, filterText, showArchived, activeTag],
-  ([$chats, $filter, $showArchived, $tag]) => {
+  [chats, filterText, showArchived, activeTag, activeProfileId],
+  ([$chats, $filter, $showArchived, $tag, $profile]) => {
     const q = $filter.trim().toLowerCase();
     return $chats.filter((c) => {
+      if ($profile !== null && (c.profileId || "") !== $profile) return false;
       if (!$showArchived && c.isArchived) return false;
       if ($tag && !c.tags.includes($tag)) return false;
       if (q) {
