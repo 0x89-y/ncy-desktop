@@ -114,6 +114,9 @@ export type AppSettings = {
   port: number;
   deviceName: string;
   theme: string;
+  /** When false (default), the desktop does not advertise over mDNS — it stays
+   *  invisible to network scanners. Pairing still works via QR / pasted JSON. */
+  discoverable: boolean;
 };
 
 export type DeviceIdentityView = {

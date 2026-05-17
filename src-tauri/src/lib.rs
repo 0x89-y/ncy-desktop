@@ -38,8 +38,11 @@ pub struct AppState {
     /// attaches its `sync-event` listener after `ServerStarted` already fired.
     pub server_status: Arc<RwLock<&'static str>>,
     pub server_addr: Arc<RwLock<Option<String>>>,
-    /// Holds the mDNS-SD registration alive for the lifetime of the app. Drop unregisters.
-    pub _mdns: Option<MdnsRegistration>,
+    /// Holds the live mDNS-SD registration (or `None` when discovery is off).
+    /// Dropping the inner value unregisters the service. Behind a `std::sync::Mutex`
+    /// so the `discoverable` setting can start/stop advertising at runtime without
+    /// a restart.
+    pub mdns: std::sync::Mutex<Option<MdnsRegistration>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -99,20 +102,27 @@ pub fn run() {
                 initial_max_hlc,
             ));
 
-            // Best-effort mDNS announcement so phones can find this desktop on the LAN
-            // without typing its IP. Failures are non-fatal — the manual paste path
-            // still works.
-            let mdns = MdnsRegistration::announce(
-                &settings.device_name,
-                &advertised_host,
-                settings.port,
-                &identity.device_id,
-            )
-            .map_err(|e| {
-                tracing::warn!("mDNS announce failed: {e}");
-                e
-            })
-            .ok();
+            // Opt-in mDNS announcement so phones can find this desktop on the LAN
+            // without typing its IP. Off by default — on shared/large networks the
+            // user may not want to broadcast the desktop's presence. The manual
+            // QR/paste pairing path works regardless. Toggling `discoverable` in
+            // settings starts/stops this at runtime (see `update_settings`).
+            let mdns = if settings.discoverable {
+                MdnsRegistration::announce(
+                    &settings.device_name,
+                    &advertised_host,
+                    settings.port,
+                    &identity.device_id,
+                )
+                .map_err(|e| {
+                    tracing::warn!("mDNS announce failed: {e}");
+                    e
+                })
+                .ok()
+            } else {
+                tracing::info!("mDNS advertising disabled (discoverable = false)");
+                None
+            };
 
             let server_status = Arc::new(RwLock::new("starting"));
             let server_addr = Arc::new(RwLock::new(None::<String>));
@@ -131,7 +141,7 @@ pub fn run() {
                 keystore: Arc::new(ProtectionKeyStore::new()),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
-                _mdns: mdns,
+                mdns: std::sync::Mutex::new(mdns),
             };
 
             let port = settings.port;

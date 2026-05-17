@@ -256,6 +256,41 @@ pub async fn update_settings(
 ) -> Result<AppSettings, String> {
     crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
     *state.settings.write().await = settings.clone();
+
+    // Reconcile mDNS advertising with the new `discoverable` setting — effective
+    // immediately, no restart. When on, re-announce (drop + recreate) so a changed
+    // device name is picked up too. Advertise the port the server actually bound
+    // (a port change still needs a restart) so we never advertise a dead port.
+    let host = state.advertised_host.read().await.clone();
+    let bound_port = state
+        .server_addr
+        .read()
+        .await
+        .as_deref()
+        .and_then(|a| a.rsplit(':').next())
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(settings.port);
+    {
+        let mut guard = state.mdns.lock().unwrap();
+        if settings.discoverable {
+            match crate::sync::MdnsRegistration::announce(
+                &settings.device_name,
+                &host,
+                bound_port,
+                &state.identity_device_id,
+            ) {
+                Ok(reg) => *guard = Some(reg),
+                Err(e) => {
+                    tracing::warn!("mDNS re-announce failed: {e}");
+                    *guard = None;
+                }
+            }
+        } else {
+            // Drop the registration → mdns-sd unregisters the service.
+            *guard = None;
+        }
+    }
+
     Ok(settings)
 }
 
@@ -310,13 +345,73 @@ pub async fn get_server_status(state: State<'_, AppState>) -> Result<ServerStatu
 
 // ---------- Phase 2a.2 authoring commands ----------
 
-fn current_message(events: &EventStore, chat_id: &str, message_id: &str) -> Result<Message, String> {
+/// The message as it currently materializes. `key` must be the chat's unlocked key
+/// for a protected chat — otherwise a protected message resolves to the 🔒
+/// placeholder and an edit/star would clobber it. `None` for unprotected chats.
+fn current_message(
+    events: &EventStore,
+    chat_id: &str,
+    message_id: &str,
+    key: Option<&[u8; 32]>,
+) -> Result<Message, String> {
     let evts = events.read_chat(chat_id).map_err(|e| e.to_string())?;
-    let mat = materialize(evts).ok_or_else(|| "chat not found".to_string())?;
+    let mat = crate::storage::materialize::materialize_with_key(evts, key)
+        .ok_or_else(|| "chat not found".to_string())?;
     mat.messages
         .into_iter()
         .find(|m| m.id == message_id)
         .ok_or_else(|| "message not found".to_string())
+}
+
+/// Serialize the `{v,enc,nonce,ct}` event payload for a sealed message — the exact
+/// shape `ChatEventCodec.payloadOf` produces on the phone, so a desktop-authored
+/// encrypted message round-trips and decodes there as an `EncryptedMessage`.
+fn seal_envelope(sealed: &crate::sync::protection::Sealed) -> serde_json::Value {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    serde_json::json!({
+        "v": crate::sync::protection::ENVELOPE_VERSION,
+        "enc": "AES-256-GCM",
+        "nonce": B64.encode(sealed.nonce),
+        "ct": B64.encode(&sealed.ciphertext),
+    })
+}
+
+/// Author a `MessageCreated`/`MessageEdited` event. In a protected chat the message
+/// body is AES-GCM-sealed before it leaves this process, so neither the local event
+/// log nor the wire ever carries plaintext. Refuses if the chat is protected but
+/// locked — the desktop must hold the PIN-derived key (chat unlocked) to author
+/// into it, otherwise we'd either leak plaintext or write a body the phone hides.
+fn author_message(
+    state: &AppState,
+    chat_id: &str,
+    op: &str,
+    msg: &Message,
+) -> Result<(), String> {
+    let meta = current_metadata(&state.events, chat_id)?;
+    let payload = if meta.is_protected {
+        let key = state
+            .keystore
+            .key_for(chat_id)
+            .ok_or_else(|| "chat is locked — unlock it before sending".to_string())?;
+        let plaintext = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
+        let sealed =
+            crate::sync::protection::seal(&key, &plaintext).map_err(|e| e.to_string())?;
+        seal_envelope(&sealed)
+    } else {
+        serde_json::to_value(msg).map_err(|e| e.to_string())?
+    };
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        chat_id,
+        op,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -356,19 +451,7 @@ pub async fn author_send_text(
         reminder_at: None,
         checklist_items: vec![],
     };
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_CREATED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
 #[tauri::command]
@@ -377,22 +460,11 @@ pub async fn author_toggle_star(
     chat_id: String,
     message_id: String,
 ) -> Result<(), String> {
-    let mut msg = current_message(&state.events, &chat_id, &message_id)?;
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
     msg.is_starred = !msg.is_starred;
     msg.edited_at = Some(now_ms());
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_EDITED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
 
 #[tauri::command]
@@ -406,7 +478,8 @@ pub async fn author_edit_text(
     if trimmed.is_empty() {
         return Err("edit cannot be empty".to_string());
     }
-    let mut msg = current_message(&state.events, &chat_id, &message_id)?;
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
     if !matches!(msg.message_type, MessageType::Text) {
         return Err("only TEXT messages support plaintext edit from desktop".to_string());
     }
@@ -424,19 +497,7 @@ pub async fn author_edit_text(
         }],
     }];
     msg.edited_at = Some(now_ms());
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_EDITED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
 
 /// Author a checklist message. Items arrive as plain strings (one per checklist row);
@@ -481,19 +542,7 @@ pub async fn author_send_checklist(
         reminder_at: None,
         checklist_items: cleaned,
     };
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_CREATED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
 /// Current chat metadata (the latest `ChatMetadataChanged`, via the materializer).
@@ -642,19 +691,7 @@ pub async fn author_send_message(
         reminder_at: None,
         checklist_items: vec![],
     };
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_CREATED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
 /// Attach an image from a local file path. Reads the bytes, hashes them, persists
@@ -707,19 +744,7 @@ pub async fn author_send_image(
         reminder_at: None,
         checklist_items: vec![],
     };
-    let payload = serde_json::to_value(&msg).map_err(|e| e.to_string())?;
-    author_event(
-        &state.clock,
-        &state.events,
-        &state.outbound,
-        &state.bus,
-        &state.identity_device_id,
-        &chat_id,
-        op_type::MESSAGE_CREATED,
-        payload,
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
 /// Phase 2b — return a content-addressed media blob to the frontend as base64.

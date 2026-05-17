@@ -434,7 +434,7 @@
             class="compose-input"
             placeholder="One item per line"
             bind:value={checklistText}
-            disabled={sending || chat.metadata.isProtected}
+            disabled={sending}
             rows="4"
           ></textarea>
           <div class="row" style="justify-content:flex-end;">
@@ -442,7 +442,7 @@
               type="button"
               class="send"
               onclick={sendChecklist}
-              disabled={sending || !checklistText.trim() || chat.metadata.isProtected}
+              disabled={sending || !checklistText.trim()}
             >
               {sending ? "…" : "Send checklist"}
             </button>
@@ -450,15 +450,15 @@
         </div>
       {/if}
       <div class="toolbar">
-        <button type="button" title="Bold (Ctrl+B)" disabled={sending || chat.metadata.isProtected} onclick={() => applyWrap("**")}><b>B</b></button>
-        <button type="button" title="Italic (Ctrl+I)" disabled={sending || chat.metadata.isProtected} onclick={() => applyWrap("*")}><i>I</i></button>
-        <button type="button" title="Strikethrough" disabled={sending || chat.metadata.isProtected} onclick={() => applyWrap("~~")}><s>S</s></button>
+        <button type="button" title="Bold (Ctrl+B)" disabled={sending} onclick={() => applyWrap("**")}><b>B</b></button>
+        <button type="button" title="Italic (Ctrl+I)" disabled={sending} onclick={() => applyWrap("*")}><i>I</i></button>
+        <button type="button" title="Strikethrough" disabled={sending} onclick={() => applyWrap("~~")}><s>S</s></button>
         <span class="sep"></span>
-        <button type="button" title="Heading 1" disabled={sending || chat.metadata.isProtected} onclick={() => applyLinePrefix("# ")}>H1</button>
-        <button type="button" title="Heading 2" disabled={sending || chat.metadata.isProtected} onclick={() => applyLinePrefix("## ")}>H2</button>
-        <button type="button" title="Heading 3" disabled={sending || chat.metadata.isProtected} onclick={() => applyLinePrefix("### ")}>H3</button>
-        <button type="button" title="Bullet list" disabled={sending || chat.metadata.isProtected} onclick={() => applyLinePrefix("- ")}>• List</button>
-        <button type="button" title="Code block" disabled={sending || chat.metadata.isProtected} onclick={insertCodeBlock}>{"</>"}</button>
+        <button type="button" title="Heading 1" disabled={sending} onclick={() => applyLinePrefix("# ")}>H1</button>
+        <button type="button" title="Heading 2" disabled={sending} onclick={() => applyLinePrefix("## ")}>H2</button>
+        <button type="button" title="Heading 3" disabled={sending} onclick={() => applyLinePrefix("### ")}>H3</button>
+        <button type="button" title="Bullet list" disabled={sending} onclick={() => applyLinePrefix("- ")}>• List</button>
+        <button type="button" title="Code block" disabled={sending} onclick={insertCodeBlock}>{"</>"}</button>
       </div>
       <div class="compose-row">
         <button
@@ -466,7 +466,7 @@
           class="attach"
           title="Attach image"
           onclick={attachImage}
-          disabled={sending || chat.metadata.isProtected}
+          disabled={sending}
         >
           📎
         </button>
@@ -475,7 +475,7 @@
           class="attach"
           title="New checklist"
           onclick={() => { checklistOpen = !checklistOpen; }}
-          disabled={sending || chat.metadata.isProtected}
+          disabled={sending}
         >
           📋
         </button>
@@ -485,24 +485,18 @@
           bind:this={composeTextarea}
           bind:value={composeText}
           onkeydown={onKeyDown}
-          disabled={sending || chat.metadata.isProtected}
+          disabled={sending}
           rows="1"
         ></textarea>
         <button
           type="button"
           class="send"
           onclick={send}
-          disabled={sending || !composeText.trim() || chat.metadata.isProtected}
+          disabled={sending || !composeText.trim()}
         >
           {sending ? "…" : "Send"}
         </button>
       </div>
-      {#if chat.metadata.isProtected}
-        <div class="compose-error tiny">
-          View-only: authoring into protected chats from the desktop isn't supported
-          yet — compose on the phone.
-        </div>
-      {/if}
     </footer>
     {/if}
   </div>

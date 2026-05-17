@@ -398,6 +398,20 @@ async fn process_inbound(
             let payload = wire.payload.clone();
             let is_new = ctx.events.append(&wire).unwrap_or(false);
             if is_new {
+                // Protected-chat catch-up: a sealed replacement carries a
+                // `supersedes` pointer to the plaintext event we synced before the
+                // chat was protected. Only such an event can newly reveal stale
+                // plaintext, so gate the rewrite on its presence — the normal sync
+                // path stays read-free.
+                if payload.get("supersedes").is_some() {
+                    if let Ok(evs) = ctx.events.read_chat(&chat_id) {
+                        if let Some(scrubbed) = scrub_superseded(&evs) {
+                            if let Err(e) = ctx.events.replace_chat(&chat_id, &scrubbed) {
+                                tracing::warn!("supersede scrub failed for {chat_id}: {e}");
+                            }
+                        }
+                    }
+                }
                 let _ = ctx.bus.send(SyncEvent::EventReceived {
                     chat_id: chat_id.clone(),
                     event_id,
@@ -574,6 +588,35 @@ async fn serve_blob(ctx: &Arc<ServerContext>, tx: &mut WsSink, hash: &str, media
 
 fn parse_event(value: &Value) -> Option<ChatEventWire> {
     serde_json::from_value::<ChatEventWire>(value.clone()).ok()
+}
+
+/// Protected-chat catch-up: gather the `supersedes` pointers carried by encrypted
+/// events (the eventIds of plaintext message events they replace) and return the
+/// log with those superseded events removed, or `None` if nothing is superseded so
+/// the caller can skip the rewrite. The pointer lives in the cleartext envelope, so
+/// this needs no key — a locked desktop still scrubs its plaintext at rest.
+fn scrub_superseded(events: &[ChatEventWire]) -> Option<Vec<ChatEventWire>> {
+    let mut superseded: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for e in events {
+        if e.payload.get("enc").is_some() {
+            if let Some(id) = e.payload.get("supersedes").and_then(|v| v.as_str()) {
+                superseded.insert(id);
+            }
+        }
+    }
+    if superseded.is_empty() {
+        return None;
+    }
+    let kept: Vec<ChatEventWire> = events
+        .iter()
+        .filter(|e| !superseded.contains(e.event_id.as_str()))
+        .cloned()
+        .collect();
+    if kept.len() == events.len() {
+        None
+    } else {
+        Some(kept)
+    }
 }
 
 async fn send_error(tx: &mut WsSink, code: &str, message: &str) {

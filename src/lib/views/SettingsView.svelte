@@ -5,6 +5,7 @@
   let port = $state(8765);
   let deviceName = $state("");
   let theme = $state("system");
+  let discoverable = $state(false);
   let saving = $state(false);
   let dirty = $state(false);
 
@@ -13,6 +14,7 @@
       port = $settings.port;
       deviceName = $settings.deviceName;
       theme = $settings.theme;
+      discoverable = $settings.discoverable;
       dirty = false;
     }
   });
@@ -25,7 +27,7 @@
     if (saving) return;
     saving = true;
     try {
-      await api.updateSettings({ port, deviceName, theme });
+      await api.updateSettings({ port, deviceName, theme, discoverable });
       await refreshSettings();
       await refreshIdentity();
     } finally {
@@ -68,6 +70,23 @@
       />
       <span class="muted tiny">
         Changes take effect after restart.
+      </span>
+    </label>
+
+    <label class="row toggle-field">
+      <input
+        type="checkbox"
+        bind:checked={discoverable}
+        onchange={markDirty}
+      />
+      <span class="col field">
+        <span>Discoverable on the network</span>
+        <span class="muted tiny">
+          When off, this desktop doesn't broadcast itself over mDNS, so it stays
+          invisible to other devices scanning the network. You can still pair by
+          scanning the QR code or pasting the pairing JSON — those carry the
+          address directly. Takes effect immediately.
+        </span>
       </span>
     </label>
   </section>
@@ -113,4 +132,13 @@
     user-select: all;
   }
   .actions { justify-content: flex-end; }
+  .toggle-field {
+    align-items: flex-start;
+    gap: .6rem;
+    margin-top: .85rem;
+  }
+  .toggle-field input {
+    margin-top: .2rem;
+    flex-shrink: 0;
+  }
 </style>

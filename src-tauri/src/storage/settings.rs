@@ -11,6 +11,12 @@ pub struct AppSettings {
     pub device_name: String,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// When false (the default), the desktop does NOT advertise itself over mDNS,
+    /// so it stays invisible to network scanners / casual browsers on shared
+    /// networks. Pairing still works via the QR / pasted JSON, which carries the
+    /// host:port directly. Flipping this takes effect immediately (no restart).
+    #[serde(default)]
+    pub discoverable: bool,
 }
 
 fn default_theme() -> String {
@@ -26,6 +32,7 @@ impl Default for AppSettings {
                 .and_then(|h| h.into_string().ok())
                 .unwrap_or_else(|| "Ncy Desktop".to_string()),
             theme: default_theme(),
+            discoverable: false,
         }
     }
 }

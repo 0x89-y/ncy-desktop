@@ -17,33 +17,36 @@ Sync core (phases 1–3) complete:
   HLC-ordered materializer (tombstones, whole-record LWW for chat metadata)
 - ✅ **Bidirectional sync** — the desktop authors events too; both sides catch up
   from a persisted per-peer watermark on reconnect
-- ✅ **mDNS auto-discovery** — phones find the desktop on the LAN without typing an
-  IP (`_ncy-sync._tcp`); QR + JSON pairing payload still available
+- ✅ **mDNS auto-discovery** — phones find the desktop on the LAN without typing
+  an IP (`_ncy-sync._tcp`); **opt-in** (off by default — flip *Discoverable on
+  the network* in settings); QR + JSON pairing works regardless
 - ✅ **Media blob transfer** — voice clips, images, avatars, and chat backgrounds
   transfer content-addressed (SHA-256) over the same socket and render inline
 - ✅ **Encrypted protected chats** (phase 3) — AES-256-GCM with a PBKDF2 key
   derived from the chat PIN; locked chats show a PIN prompt and only ever
   materialize `🔒` placeholders until unlocked. Keys are memory-only, never
-  persisted
+  persisted. **Authoring into a protected chat works while it's unlocked** —
+  the desktop seals each message before it touches the local log or the wire,
+  so plaintext never leaves the process
 - ✅ Authoring from the desktop: send text (with a Markdown-style rich-text
   toolbar — bold/italic/strike, H1–H3, bullets, code blocks), attach images,
   create checklists, edit/delete/star messages — all synced back to the phone
+  (including into unlocked protected chats)
 - ✅ **Profile sync** — the phone's profiles (separate chat spaces) are all
   mirrored; the chat list gets an "All / <profile>" switcher to scope by profile
 - ✅ Chat list with pinned / archived / tags; cross-chat **search**; **starred**
   and **reminders** views; chat avatars + wallpapers
 - ✅ Desktop niceties: system tray (close-to-tray keeps sync alive), window
   size/position restore, native notifications when a message arrives unfocused
+- ✅ **Protect-after-sync catch-up** — if a chat is marked protected *after* it
+  already synced to the desktop in plaintext, the phone re-issues each message
+  sealed with a `supersedes` pointer and the desktop scrubs the stale plaintext
+  from its at-rest log automatically (no key needed, no manual re-sync)
 - ✅ Settings: device name, port, theme
 
 Out of scope / not done:
 
 - ❌ Off-LAN relay (sync only works when both devices are on the same network)
-- ❌ Authoring **into protected chats** from the desktop (view-only when unlocked;
-  compose on the phone — the desktop doesn't hold the encryption key long enough
-  to author safely)
-- ❌ Pulling encrypted replacements for chats a desktop already synced in plaintext
-  before they were protected (delete + re-sync that one chat to refresh it)
 
 ## Prerequisites
 
@@ -85,18 +88,22 @@ Output lands in `src-tauri/target/release/`:
 
 ## Pairing a phone
 
-Easiest: with the desktop running, open the phone (**Ncy → Settings → Sync
-devices**) — the desktop appears under "Found on this network" via mDNS. Then:
-
 1. On the desktop, go to **Devices**, click **Create** to make a pairing slot.
    Each slot has its own 32-byte pre-shared secret — don't share QR codes
    between phones.
 2. On the phone: **Scan QR** (camera) or **Paste pairing JSON**.
 3. Foreground the phone app. Catchup runs immediately; new events stream live.
 
-If mDNS doesn't surface the desktop (some VPNs/segmented networks), the pairing
-JSON carries the host:port explicitly — paste it manually. The **Refresh IPs**
-control on the Devices screen lets you pick which LAN IP to advertise.
+The QR / pairing JSON carries the desktop's host:port directly, so pairing
+always works regardless of network discovery.
+
+**Network discovery is opt-in.** By default the desktop does **not** advertise
+itself over mDNS — on a shared or large network you usually don't want to
+broadcast its presence. Turn on **Settings → Sync server → Discoverable on the
+network** to let the phone list it automatically under "Found on this network"
+(**Ncy → Settings → Sync devices**); the toggle takes effect immediately, no
+restart. The **Refresh IPs** control on the Devices screen picks which LAN IP is
+advertised when discovery is on.
 
 ## Protected chats
 
@@ -106,6 +113,15 @@ the phone to decrypt it for that session. The chat list shows `🔒` placeholder
 (no content preview) until unlocked. Re-lock via the header button, or just
 restart — keys live only in memory. Chat metadata (name, tags, pinned, avatar)
 stays in plaintext so the list still renders.
+
+While a protected chat is unlocked you can author into it normally (send, edit,
+star, checklists, images). The desktop seals each message with the chat's
+in-memory key *before* it's written to the local event log or sent over the
+wire, so plaintext never leaves the process — the phone receives the same
+`{v,enc,nonce,ct}` envelope it would author itself. Sending is refused if the
+chat somehow isn't unlocked, so a readable body can't slip into an encrypted
+chat. (One detail: edits/stars operate on the decrypted message, so the chat
+must be unlocked — which it already is to see the compose box.)
 
 ## Profiles
 
