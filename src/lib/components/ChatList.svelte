@@ -520,7 +520,11 @@
     padding: 2rem 1rem;
     text-align: center;
   }
-  .ctx-backdrop {
+  /* Backdrop is a <button> for a11y; it must NOT pick up the app's global
+     accent-pill button styling on hover — pseudo-class specificity would beat
+     a plain `.ctx-backdrop` rule, so override `:hover` explicitly too. */
+  .ctx-backdrop,
+  .ctx-backdrop:hover {
     position: fixed;
     inset: 0;
     z-index: 40;
@@ -528,6 +532,9 @@
     padding: 0;
     margin: 0;
     background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+    transition: none;
     cursor: default;
   }
   .ctx-menu {

@@ -858,7 +858,9 @@
     opacity: .45;
     cursor: default;
   }
-  .ctx-backdrop {
+  /* See ChatList.svelte — must beat `button:hover` from app.css. */
+  .ctx-backdrop,
+  .ctx-backdrop:hover {
     position: fixed;
     inset: 0;
     z-index: 40;
@@ -866,6 +868,9 @@
     padding: 0;
     margin: 0;
     background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+    transition: none;
     cursor: default;
   }
   .ctx-menu {
