@@ -17,10 +17,19 @@ pub struct AppSettings {
     /// host:port directly. Flipping this takes effect immediately (no restart).
     #[serde(default)]
     pub discoverable: bool,
+    /// One of "purple" / "blue" / "green" / "pink" / "orange" / "teal" — drives
+    /// the `[data-accent='…']` CSS preset. Defaulted so old `settings.json`
+    /// files without this field still load.
+    #[serde(default = "default_accent")]
+    pub accent: String,
 }
 
 fn default_theme() -> String {
     "system".to_string()
+}
+
+fn default_accent() -> String {
+    "purple".to_string()
 }
 
 impl Default for AppSettings {
@@ -33,6 +42,7 @@ impl Default for AppSettings {
                 .unwrap_or_else(|| "Ncy Desktop".to_string()),
             theme: default_theme(),
             discoverable: false,
+            accent: default_accent(),
         }
     }
 }

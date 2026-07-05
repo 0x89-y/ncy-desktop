@@ -110,6 +110,56 @@ pub fn save_pairings(path: &Path, file: &PairingFile) -> Result<()> {
     Ok(())
 }
 
+/// A remote peer this desktop connects *out* to (the client role) — e.g. another
+/// desktop. Built from the pairing JSON that peer produced, so we already know its
+/// `deviceId`, host/port and the shared secret. Watermarks mirror the phone's
+/// `SyncPeer`: `last_sent_hlc` is the high-water the peer has acked from us
+/// (drives our outbound catch-up); `last_received_hlc` is the highest we've
+/// applied from it (sent as `Hello.sinceHlc`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundPeer {
+    /// The remote's `deviceId` (from its pairing payload). Loop-guard + identity.
+    pub id: String,
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(rename = "secretB64")]
+    pub secret_b64: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(default, rename = "lastSeenAt")]
+    pub last_seen_at: Option<i64>,
+    #[serde(default, rename = "lastSentHlc")]
+    pub last_sent_hlc: Option<HlcTimestamp>,
+    #[serde(default, rename = "lastReceivedHlc")]
+    pub last_received_hlc: Option<HlcTimestamp>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PeerFile {
+    #[serde(default)]
+    pub peers: Vec<OutboundPeer>,
+}
+
+pub fn load_peers(path: &Path) -> Result<PeerFile> {
+    if !path.exists() {
+        return Ok(PeerFile::default());
+    }
+    let bytes = fs::read(path)?;
+    if bytes.is_empty() {
+        return Ok(PeerFile::default());
+    }
+    Ok(serde_json::from_slice::<PeerFile>(&bytes).unwrap_or_default())
+}
+
+pub fn save_peers(path: &Path, file: &PeerFile) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(file)?)?;
+    Ok(())
+}
+
 pub fn generate_secret_b64() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -128,6 +178,7 @@ pub fn data_paths(root: PathBuf) -> DataPaths {
     DataPaths {
         identity: root.join("identity.json"),
         pairings: root.join("pairings.json"),
+        peers: root.join("peers.json"),
         events: root.join("events"),
         blobs: root.join("blobs"),
         settings: root.join("settings.json"),
@@ -139,6 +190,8 @@ pub struct DataPaths {
     pub root: PathBuf,
     pub identity: PathBuf,
     pub pairings: PathBuf,
+    /// Outbound peers this desktop connects to (the client role).
+    pub peers: PathBuf,
     pub events: PathBuf,
     pub blobs: PathBuf,
     pub settings: PathBuf,

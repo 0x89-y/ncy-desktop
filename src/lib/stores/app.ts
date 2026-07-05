@@ -1,5 +1,5 @@
 import { writable, derived, get } from "svelte/store";
-import { api, type ChatSummary, type MaterializedChat, type AppSettings, type PairingDescriptor, type SyncEventPayload, type DeviceIdentityView } from "../ipc";
+import { api, type ChatSummary, type MaterializedChat, type AppSettings, type PairingDescriptor, type PeerView, type SyncEventPayload, type DeviceIdentityView } from "../ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   isPermissionGranted,
@@ -11,6 +11,7 @@ export const chats = writable<ChatSummary[]>([]);
 export const activeChatId = writable<string | null>(null);
 export const activeChat = writable<MaterializedChat | null>(null);
 export const pairings = writable<PairingDescriptor[]>([]);
+export const peers = writable<PeerView[]>([]);
 export const settings = writable<AppSettings | null>(null);
 export const identity = writable<DeviceIdentityView | null>(null);
 export const lanIps = writable<string[]>([]);
@@ -55,6 +56,10 @@ export async function selectChat(id: string | null) {
 export async function refreshPairings() {
   const ps = await api.listPairings();
   pairings.set(ps);
+}
+
+export async function refreshPeers() {
+  peers.set(await api.listPeers());
 }
 
 export async function refreshSettings() {
@@ -118,6 +123,7 @@ export async function bootstrap() {
   await Promise.all([
     refreshChats(),
     refreshPairings(),
+    refreshPeers(),
     refreshSettings(),
     refreshIdentity(),
     refreshLanIps(),
@@ -140,6 +146,7 @@ export async function bootstrap() {
           return next;
         });
         await refreshPairings();
+        await refreshPeers();
         break;
       case "peer-disconnected":
         connectedPeers.update((s) => {
@@ -147,6 +154,7 @@ export async function bootstrap() {
           next.delete(ev.peer);
           return next;
         });
+        await refreshPeers();
         break;
       case "event-received":
         await refreshChats();

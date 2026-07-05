@@ -7,14 +7,16 @@
     chat,
     selected,
     onclick,
+    oncontextmenu,
   }: {
     chat: ChatSummary;
     selected: boolean;
     onclick: () => void;
+    oncontextmenu?: (e: MouseEvent) => void;
   } = $props();
 </script>
 
-<button class="row-btn" class:selected onclick={onclick}>
+<button class="row-btn" class:selected onclick={onclick} oncontextmenu={oncontextmenu}>
   <Avatar name={chat.name} size={44} avatarFile={chat.avatarFile} />
   <div class="middle">
     <div class="row top">

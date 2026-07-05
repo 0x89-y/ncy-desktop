@@ -1,31 +1,36 @@
 <script lang="ts">
   import { activeView, serverStatus, connectedPeers, identity, pairings } from "../stores/app";
+  import {
+    MessageSquare,
+    Search,
+    Star,
+    Clock,
+    Link2,
+    Settings,
+    type Icon as IconType,
+  } from "@lucide/svelte";
 
   type View = "chats" | "search" | "starred" | "reminders" | "pairing" | "settings";
-  const items: { key: View; label: string; icon: string }[] = [
-    { key: "chats", label: "Chats", icon: "💬" },
-    { key: "search", label: "Search", icon: "🔎" },
-    { key: "starred", label: "Starred", icon: "⭐" },
-    { key: "reminders", label: "Reminders", icon: "⏰" },
-    { key: "pairing", label: "Devices", icon: "🔗" },
-    { key: "settings", label: "Settings", icon: "⚙️" },
+  const items: { key: View; label: string; icon: typeof IconType }[] = [
+    { key: "chats", label: "Chats", icon: MessageSquare },
+    { key: "search", label: "Search", icon: Search },
+    { key: "starred", label: "Starred", icon: Star },
+    { key: "reminders", label: "Reminders", icon: Clock },
+    { key: "pairing", label: "Devices", icon: Link2 },
+    { key: "settings", label: "Settings", icon: Settings },
   ];
 </script>
 
 <aside class="bar">
-  <div class="brand">
-    <div class="logo">N</div>
-    <span class="name">Ncy</span>
-  </div>
-
   <nav class="col">
     {#each items as it (it.key)}
+      {@const Icon = it.icon}
       <button
         class="nav"
         class:active={$activeView === it.key}
         onclick={() => activeView.set(it.key)}
       >
-        <span class="ico">{it.icon}</span>
+        <span class="ico"><Icon size={17} /></span>
         <span class="lbl">{it.label}</span>
         {#if it.key === "pairing" && $pairings.length > 0}
           <span class="badge">{$pairings.length}</span>
@@ -56,47 +61,33 @@
     flex-shrink: 0;
     padding: 1rem .75rem;
     background: var(--surface);
-    border-right: 1px solid var(--outline-variant);
+    border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: .5rem;
-    padding: 0 .25rem;
-  }
-  .logo {
-    width: 32px; height: 32px;
-    border-radius: 10px;
-    background: var(--primary);
-    color: var(--on-primary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 800;
-  }
-  .name { font-weight: 700; font-size: 1.1rem; }
-
   nav { gap: .15rem; }
   .nav {
     display: flex;
     align-items: center;
     gap: .65rem;
     background: transparent;
-    color: var(--on-surface);
+    color: var(--text-muted);
     text-align: left;
-    padding: .55rem .75rem;
-    border-radius: 10px;
+    padding: .5rem .7rem;
+    border-radius: var(--radius-sm);
     width: 100%;
+    border: 1px solid transparent;
+    font-weight: 500;
+    font-size: .92rem;
   }
-  .nav:hover { background: var(--surface-2); filter: none; }
+  .nav:hover { background: var(--surface-hover); color: var(--text); filter: none; }
   .nav.active {
-    background: var(--primary-container);
-    color: var(--on-primary-container);
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text);
   }
-  .ico { font-size: 1.05rem; }
+  .ico { display: inline-flex; align-items: center; line-height: 0; color: inherit; }
   .lbl { flex: 1; }
   .status {
     display: flex; flex-direction: column; gap: .15rem;

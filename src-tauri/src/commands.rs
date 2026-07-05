@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::model::event::op_type;
 use crate::model::{BlockType, ChatMetadata, Message, MessageType, RichTextBlock, RichTextSpan};
 use crate::storage::{
-    materialize, now_ms, save_pairings, AppSettings, EventStore, MaterializedChat, Pairing,
+    materialize, now_ms, save_pairings, save_peers, AppSettings, EventStore, MaterializedChat,
+    OutboundPeer, Pairing,
 };
 use crate::sync::{author_event, SyncEvent};
 use crate::AppState;
@@ -244,6 +245,103 @@ pub async fn delete_pairing(state: State<'_, AppState>, id: String) -> Result<()
     save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())
 }
 
+// ---------- Desktop↔desktop: outbound peers (client role) ----------
+
+/// The pairing payload another device produced (mirrors `PairingPayload` /
+/// `PairingPayload.kt`). Only the fields we need to connect out.
+#[derive(Debug, Deserialize)]
+struct IncomingPairing {
+    #[serde(rename = "deviceId")]
+    device_id: String,
+    #[serde(default)]
+    name: String,
+    host: String,
+    port: u16,
+    secret: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PeerView {
+    pub id: String,
+    pub label: String,
+    pub host: String,
+    pub port: u16,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "lastSeenAt")]
+    pub last_seen_at: Option<i64>,
+}
+
+/// Add another desktop as an outbound sync peer by pasting *its* pairing JSON
+/// (produced by `create_pairing` on that device). The supervisor picks it up
+/// immediately and starts a reconnecting connection.
+#[tauri::command]
+pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Result<(), String> {
+    let p: IncomingPairing = serde_json::from_str(payload_json.trim())
+        .map_err(|e| format!("not a valid pairing JSON: {e}"))?;
+    if p.device_id == state.identity_device_id {
+        return Err("that's this device's own pairing — paste another desktop's".into());
+    }
+    if p.host.trim().is_empty() || p.secret.trim().is_empty() {
+        return Err("pairing JSON is missing host or secret".into());
+    }
+    let mut guard = state.peers.write().await;
+    if guard.peers.iter().any(|e| e.id == p.device_id) {
+        return Err("already syncing with that device".into());
+    }
+    let label = if p.name.trim().is_empty() {
+        p.device_id.clone()
+    } else {
+        p.name.clone()
+    };
+    guard.peers.push(OutboundPeer {
+        id: p.device_id,
+        label,
+        host: p.host,
+        port: p.port,
+        secret_b64: p.secret,
+        created_at: now_ms(),
+        last_seen_at: None,
+        last_sent_hlc: None,
+        last_received_hlc: None,
+    });
+    save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
+    drop(guard);
+    state.peer_notify.notify_one();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn list_peers(state: State<'_, AppState>) -> Result<Vec<PeerView>, String> {
+    let guard = state.peers.read().await;
+    Ok(guard
+        .peers
+        .iter()
+        .map(|p| PeerView {
+            id: p.id.clone(),
+            label: p.label.clone(),
+            host: p.host.clone(),
+            port: p.port,
+            created_at: p.created_at,
+            last_seen_at: p.last_seen_at,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn delete_peer(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut guard = state.peers.write().await;
+    let before = guard.peers.len();
+    guard.peers.retain(|p| p.id != id);
+    let changed = guard.peers.len() != before;
+    if changed {
+        save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
+    }
+    drop(guard);
+    state.peer_notify.notify_one();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String> {
     Ok(state.settings.read().await.clone())
@@ -366,14 +464,21 @@ fn current_message(
 /// Serialize the `{v,enc,nonce,ct}` event payload for a sealed message — the exact
 /// shape `ChatEventCodec.payloadOf` produces on the phone, so a desktop-authored
 /// encrypted message round-trips and decodes there as an `EncryptedMessage`.
-fn seal_envelope(sealed: &crate::sync::protection::Sealed) -> serde_json::Value {
+fn seal_envelope(
+    sealed: &crate::sync::protection::Sealed,
+    supersedes: Option<&str>,
+) -> serde_json::Value {
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
-    serde_json::json!({
+    let mut env = serde_json::json!({
         "v": crate::sync::protection::ENVELOPE_VERSION,
         "enc": "AES-256-GCM",
         "nonce": B64.encode(sealed.nonce),
         "ct": B64.encode(&sealed.ciphertext),
-    })
+    });
+    if let Some(s) = supersedes {
+        env["supersedes"] = serde_json::Value::String(s.to_string());
+    }
+    env
 }
 
 /// Author a `MessageCreated`/`MessageEdited` event. In a protected chat the message
@@ -396,7 +501,7 @@ fn author_message(
         let plaintext = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
         let sealed =
             crate::sync::protection::seal(&key, &plaintext).map_err(|e| e.to_string())?;
-        seal_envelope(&sealed)
+        seal_envelope(&sealed, None)
     } else {
         serde_json::to_value(msg).map_err(|e| e.to_string())?
     };
@@ -411,6 +516,154 @@ fn author_message(
         payload,
     )
     .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Re-seal every message event in a chat under `new_key`, each as a fresh event
+/// that `supersedes` the old one (so peers replace what they hold and our own
+/// at-rest log drops the stale copy via the shared scrub). `old_key` is `Some`
+/// when existing content is already encrypted (PIN change) — those events are
+/// decrypted with it first; `None` when the chat is still plaintext (initial
+/// protect). Validation is done up front: nothing is authored until every
+/// existing event has been recovered to plaintext, so a wrong old PIN leaves
+/// the chat untouched.
+fn reseal_all_messages(
+    state: &AppState,
+    chat_id: &str,
+    new_key: &[u8; 32],
+    old_key: Option<&[u8; 32]>,
+) -> Result<usize, String> {
+    let evts = state.events.read_chat(chat_id).map_err(|e| e.to_string())?;
+    // Phase 1 — recover plaintext for every message event (no mutation yet).
+    let mut work: Vec<(String, String, Vec<u8>)> = Vec::new();
+    for w in &evts {
+        let is_msg =
+            w.op_type == op_type::MESSAGE_CREATED || w.op_type == op_type::MESSAGE_EDITED;
+        if !is_msg {
+            continue;
+        }
+        let plaintext = if w.payload.get("enc").is_some() {
+            let key = old_key
+                .ok_or_else(|| "chat already has encrypted content".to_string())?;
+            crate::sync::protection::open_envelope(&w.payload, key)
+                .ok_or_else(|| "wrong current PIN".to_string())?
+        } else {
+            // Plaintext message event — its payload *is* the Message JSON.
+            serde_json::to_vec(&w.payload).map_err(|e| e.to_string())?
+        };
+        work.push((w.event_id.clone(), w.op_type.clone(), plaintext));
+    }
+    // Phase 2 — author one fresh sealed event per message, superseding the old.
+    for (old_id, op, pt) in &work {
+        let sealed = crate::sync::protection::seal(new_key, pt).map_err(|e| e.to_string())?;
+        let payload = seal_envelope(&sealed, Some(old_id));
+        author_event(
+            &state.clock,
+            &state.events,
+            &state.outbound,
+            &state.bus,
+            &state.identity_device_id,
+            chat_id,
+            op,
+            payload,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // Phase 3 — drop the now-superseded plaintext / old-encrypted events at rest.
+    if let Ok(evs) = state.events.read_chat(chat_id) {
+        if let Some(scrubbed) = crate::sync::scrub_superseded(&evs) {
+            state
+                .events
+                .replace_chat(chat_id, &scrubbed)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(work.len())
+}
+
+/// Protect an unprotected chat and set its PIN, from the desktop. Generates a
+/// salt, derives + caches the key, flips `isProtected`/`protectionSalt` (the
+/// metadata stays plaintext — it always does), then re-seals existing messages
+/// so neither the at-rest log nor peers keep readable copies. Mirrors the
+/// phone's set-protected + first-unlock + `migrateProtectedChat`, in one step.
+#[tauri::command]
+pub async fn protect_chat(
+    state: State<'_, AppState>,
+    chat_id: String,
+    pin: String,
+) -> Result<(), String> {
+    if pin.is_empty() {
+        return Err("PIN cannot be empty".into());
+    }
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    if meta.is_protected {
+        return Err("chat is already protected".into());
+    }
+    let salt = crate::sync::protection::generate_salt();
+    let key = crate::sync::protection::derive_key(&pin, &salt).map_err(|e| e.to_string())?;
+
+    meta.is_protected = true;
+    meta.protection_salt = Some(salt);
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+
+    state.keystore.unlock(&chat_id, key);
+    reseal_all_messages(state.inner(), &chat_id, &key, None)?;
+    Ok(())
+}
+
+/// Change a protected chat's PIN. Verifies the current PIN against an existing
+/// sealed event, then re-seals everything under the new key (superseding the
+/// old events) and re-caches the key. The salt is unchanged — only the derived
+/// key changes — so no metadata event is needed.
+#[tauri::command]
+pub async fn change_chat_pin(
+    state: State<'_, AppState>,
+    chat_id: String,
+    old_pin: String,
+    new_pin: String,
+) -> Result<(), String> {
+    if new_pin.is_empty() {
+        return Err("new PIN cannot be empty".into());
+    }
+    let meta = current_metadata(&state.events, &chat_id)?;
+    if !meta.is_protected {
+        return Err("chat is not protected".into());
+    }
+    let salt = meta
+        .protection_salt
+        .ok_or_else(|| "chat has no protection salt".to_string())?;
+    let old_key =
+        crate::sync::protection::derive_key(&old_pin, &salt).map_err(|e| e.to_string())?;
+
+    // Verify the current PIN against any one sealed event before mutating.
+    let evts = state.events.read_chat(&chat_id).map_err(|e| e.to_string())?;
+    let sample = evts.iter().find(|e| {
+        matches!(
+            e.op_type.as_str(),
+            op_type::MESSAGE_CREATED | op_type::MESSAGE_EDITED
+        ) && e.payload.get("enc").is_some()
+    });
+    if let Some(ev) = sample {
+        if crate::sync::protection::open_envelope(&ev.payload, &old_key).is_none() {
+            return Err("wrong current PIN".into());
+        }
+    }
+
+    let new_key =
+        crate::sync::protection::derive_key(&new_pin, &salt).map_err(|e| e.to_string())?;
+    reseal_all_messages(state.inner(), &chat_id, &new_key, Some(&old_key))?;
+    state.keystore.unlock(&chat_id, new_key);
     Ok(())
 }
 
@@ -463,6 +716,30 @@ pub async fn author_toggle_star(
     let key = state.keystore.key_for(&chat_id);
     let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
     msg.is_starred = !msg.is_starred;
+    msg.edited_at = Some(now_ms());
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
+}
+
+/// Tick / untick one item of a checklist message. Key-aware so it works in an
+/// unlocked protected chat (reads the decrypted message, re-seals on author).
+#[tauri::command]
+pub async fn author_toggle_checklist_item(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    item_id: String,
+) -> Result<(), String> {
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+    if !matches!(msg.message_type, MessageType::Checklist) {
+        return Err("not a checklist message".into());
+    }
+    let item = msg
+        .checklist_items
+        .iter_mut()
+        .find(|i| i.id == item_id)
+        .ok_or_else(|| "checklist item not found".to_string())?;
+    item.checked = !item.checked;
     msg.edited_at = Some(now_ms());
     author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
@@ -552,6 +829,52 @@ fn current_metadata(events: &EventStore, chat_id: &str) -> Result<ChatMetadata, 
     materialize(evts)
         .map(|m| m.metadata)
         .ok_or_else(|| "chat not found".to_string())
+}
+
+/// Create a brand-new chat from the desktop — the primitive that makes the
+/// desktop usable with no phone at all. Emits a `ChatMetadataChanged` for a fresh
+/// chatId via the normal author pipeline (HLC tick → persist → broadcast → bus),
+/// so it shows immediately and syncs to any connected peer. A new chat has no
+/// prior events, so it carries an empty profile → the "Default" bucket; a phone
+/// that later receives it files it under its active profile.
+#[tauri::command]
+pub async fn author_create_chat(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("name cannot be empty".into());
+    }
+    let chat_id = uuid::Uuid::new_v4().to_string();
+    let meta = ChatMetadata {
+        id: chat_id.clone(),
+        name: trimmed.to_string(),
+        avatar_file: None,
+        background_file: None,
+        created_at: now_ms(),
+        is_pinned: false,
+        bubble_color: None,
+        bubble_gradient: false,
+        is_archived: false,
+        tags: vec![],
+        is_protected: false,
+        hide_name: false,
+        protection_salt: None,
+    };
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(chat_id)
 }
 
 /// Patch chat-level metadata from the desktop and sync it back. Only the provided
@@ -766,6 +1089,146 @@ pub async fn read_blob(
         .read(&hash, &media_type)
         .map_err(|e| e.to_string())?;
     Ok(Some(B64.encode(bytes)))
+}
+
+// ---------- Standalone backup / restore ----------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportSummary {
+    pub chats: usize,
+    pub events: usize,
+    pub blobs: usize,
+}
+
+/// Write a portable backup zip: every chat's `events/<id>.ndjson` (the source of
+/// truth) plus the content-addressed `blobs/`. Device-local config (identity,
+/// pairings, peers, settings) is intentionally excluded — restoring it onto
+/// another machine would clone the deviceId and break sync.
+#[tauri::command]
+pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Result<(), String> {
+    use std::io::Write;
+    let file =
+        std::fs::File::create(&dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    let mut copy_dir = |dir: &std::path::Path, prefix: &str, ndjson_only: bool| -> Result<(), String> {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return Ok(()), // dir may not exist yet — nothing to back up
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if !p.is_file() {
+                continue;
+            }
+            let name = match p.file_name().and_then(|s| s.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if name.contains(".tmp.") {
+                continue; // skip in-progress temp writes
+            }
+            if ndjson_only && !name.ends_with(".ndjson") {
+                continue;
+            }
+            let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+            zip.start_file(format!("{prefix}/{name}"), opts)
+                .map_err(|e| e.to_string())?;
+            zip.write_all(&bytes).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    };
+
+    copy_dir(&state.paths.events, "events", true)?;
+    copy_dir(state.blobs.root(), "blobs", false)?;
+    zip.finish().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Restore a backup zip by *replaying* its events into the local log — a union,
+/// not an overwrite. Dedup by `eventId` makes it idempotent; HLC ordering makes
+/// it converge. Blobs are copied if missing (content-addressed, so safe).
+#[tauri::command]
+pub async fn import_backup(
+    state: State<'_, AppState>,
+    src_path: String,
+) -> Result<ImportSummary, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(&src_path).map_err(|e| format!("open {src_path}: {e}"))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|e| format!("not a valid backup zip: {e}"))?;
+
+    let mut chat_files: std::collections::HashSet<String> = Default::default();
+    let mut touched: std::collections::HashSet<String> = Default::default();
+    let mut events_added = 0usize;
+    let mut blobs_added = 0usize;
+
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        if let Some(fname) = name.strip_prefix("events/") {
+            if !fname.ends_with(".ndjson") || fname.contains('/') {
+                continue;
+            }
+            chat_files.insert(fname.to_string());
+            let mut buf = String::new();
+            entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+            for line in buf.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(wire) =
+                    serde_json::from_str::<crate::model::event::ChatEventWire>(line)
+                {
+                    state.clock.receive(&wire.hlc, now_ms());
+                    if state.events.append(&wire).unwrap_or(false) {
+                        events_added += 1;
+                        touched.insert(wire.chat_id.clone());
+                    }
+                }
+            }
+        } else if let Some(fname) = name.strip_prefix("blobs/") {
+            // Content-addressed flat names only — reject anything path-ish.
+            if fname.is_empty() || fname.contains('/') || fname.contains('\\') || fname.contains("..")
+            {
+                continue;
+            }
+            let dest = state.blobs.root().join(fname);
+            if dest.exists() {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            if std::fs::write(&dest, &bytes).is_ok() {
+                blobs_added += 1;
+            }
+        }
+    }
+
+    // Protected-chat catch-up parity, and nudge the UI to re-materialize.
+    for cid in &touched {
+        if let Ok(evs) = state.events.read_chat(cid) {
+            if let Some(scrubbed) = crate::sync::scrub_superseded(&evs) {
+                let _ = state.events.replace_chat(cid, &scrubbed);
+            }
+        }
+        let _ = state.bus.send(SyncEvent::EventReceived {
+            chat_id: cid.clone(),
+            event_id: String::new(),
+        });
+    }
+
+    Ok(ImportSummary {
+        chats: chat_files.len(),
+        events: events_added,
+        blobs: blobs_added,
+    })
 }
 
 /// Forward sync server events into a Tauri event channel so the frontend can react

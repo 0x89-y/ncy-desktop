@@ -11,7 +11,15 @@ Stack: **Tauri 2** (Rust backend) + **Svelte 5** + **TypeScript** (web frontend)
 
 Sync core (phases 1–3) complete:
 
-- ✅ WebSocket sync server with HMAC pairing handshake; multi-pairing (each phone
+- ✅ **Standalone use** — works with no phone at all: create chats, author/edit/
+  delete/star messages, tick checklist items, attach images — entirely offline
+  on its own event log, with **backup/restore** to a portable `.zip`
+- ✅ **Desktop↔desktop sync** — link two desktops by pasting one's pairing JSON
+  into the other; the connecting side runs a client connector (challenge/HMAC,
+  watermarked bidirectional Event/Ack/Blob, auto-reconnect) against the other's
+  server. Hub topology: one desktop is the server; the other desktop and the
+  phone connect to it
+- ✅ WebSocket sync server with HMAC pairing handshake; multi-pairing (each peer
   gets its own 32-byte pre-shared secret)
 - ✅ Per-chat append-only NDJSON event log, idempotent dedup by `eventId`,
   HLC-ordered materializer (tombstones, whole-record LWW for chat metadata)
@@ -27,7 +35,12 @@ Sync core (phases 1–3) complete:
   materialize `🔒` placeholders until unlocked. Keys are memory-only, never
   persisted. **Authoring into a protected chat works while it's unlocked** —
   the desktop seals each message before it touches the local log or the wire,
-  so plaintext never leaves the process
+  so plaintext never leaves the process. The desktop can also **protect a chat
+  and set/change its PIN** itself (re-seals existing messages via `supersedes`)
+- ✅ **Protect-after-sync catch-up** — if a chat is marked protected *after* it
+  already synced to the desktop in plaintext, the phone re-issues each message
+  sealed with a `supersedes` pointer and the desktop scrubs the stale plaintext
+  from its at-rest log automatically (no key needed, no manual re-sync)
 - ✅ Authoring from the desktop: send text (with a Markdown-style rich-text
   toolbar — bold/italic/strike, H1–H3, bullets, code blocks), attach images,
   create checklists, edit/delete/star messages — all synced back to the phone
@@ -38,11 +51,8 @@ Sync core (phases 1–3) complete:
   and **reminders** views; chat avatars + wallpapers
 - ✅ Desktop niceties: system tray (close-to-tray keeps sync alive), window
   size/position restore, native notifications when a message arrives unfocused
-- ✅ **Protect-after-sync catch-up** — if a chat is marked protected *after* it
-  already synced to the desktop in plaintext, the phone re-issues each message
-  sealed with a `supersedes` pointer and the desktop scrubs the stale plaintext
-  from its at-rest log automatically (no key needed, no manual re-sync)
-- ✅ Settings: device name, port, theme
+- ✅ Settings: device name, port, theme, and **opt-in network discoverability**
+  (mDNS off by default)
 
 Out of scope / not done:
 
@@ -54,9 +64,14 @@ Out of scope / not done:
 - Rust stable + the platform's WebView2 / WebKitGTK dependencies, per the Tauri
   docs: <https://v2.tauri.app/start/prerequisites/>
 
-Windows, macOS, and Linux are all supported — the codebase is platform-agnostic
-(see the cross-platform notes in the Ncy repo's plan docs). You build natively on
-each OS; there's no cross-compilation step.
+**Platform support:** built, run, and tested on **Windows** only so far. The
+codebase is platform-portable by design — Tauri 2 and every dependency are
+cross-platform, and there's no platform-specific code (the lone `windows_subsystem`
+attribute in `main.rs` is silently ignored elsewhere) — so it *should* build and
+run on macOS and Linux with the standard Tauri prerequisites above, but that is
+**unverified**: nobody has built or run it there yet, there's no CI, and the
+distribution/packaging path (`.dmg`, `.AppImage`, code-signing) is untried. You
+build natively on each OS; there's no cross-compilation step.
 
 ## Run from source
 
@@ -105,11 +120,50 @@ network** to let the phone list it automatically under "Found on this network"
 restart. The **Refresh IPs** control on the Devices screen picks which LAN IP is
 advertised when discovery is on.
 
+## Use without a phone
+
+The desktop is a full client on its own — no phone required. Hit **+** in the
+chat list to create a chat, then compose / edit / star / delete, tick checklist
+items, attach images normally. Everything persists to the desktop's own per-chat
+event log, so it survives restarts and will sync to a phone (or another desktop)
+if you pair one later. A desktop-created chat starts in the **Default** profile
+bucket; a phone that later receives it files it under its active profile.
+
+**Back up your notes.** Settings → **Backup** → *Export backup…* writes a single
+`.zip` of every chat's event log plus its media. *Import backup…* replays it
+back — a **merge**, not an overwrite (events dedupe by id and converge by HLC),
+so re-importing or importing onto a populated device is safe. The zip is
+content only; device identity, pairings and settings stay device-local. This is
+the recommended way to back up a phone-less desktop or move it to a new machine.
+
+## Sync two desktops
+
+Same handshake as the phone, just desktop-to-desktop. Pick one desktop to be
+the **server** (it keeps doing what it already does). On the **other** desktop:
+
+1. On the server desktop: **Devices → New pairing → Copy JSON**.
+2. On the client desktop: **Devices → Sync with another desktop → paste the
+   JSON → Add desktop**. It connects out immediately and reconnects
+   automatically; the peer shows **Connected** when live.
+3. Existing chats catch up on connect; new edits stream live both ways.
+
+Topology is a **hub**: with a phone and two desktops, run the server on one
+desktop; the other desktop and the phone connect to it. Server↔client and
+server↔phone are real-time bidirectional. A phone-authored message reaches the
+*client* desktop via catch-up when it (re)connects, not instantly — adding
+real-time relay between two clients of the same hub is a deliberate
+non-goal for now.
+
 ## Protected chats
 
-A chat marked protected on the phone syncs with its message bodies AES-256-GCM
-encrypted. On the desktop it shows a lock screen; enter the same PIN you use on
-the phone to decrypt it for that session. The chat list shows `🔒` placeholders
+A protected chat syncs with its message bodies AES-256-GCM encrypted. You can
+protect a chat **from the desktop** too: the chat header's ⋯ menu →
+*Protect chat…* (set a PIN) or, on an already-protected chat, *Change PIN…*.
+Protecting generates the salt, derives + caches the key, and re-seals every
+existing message (superseding the plaintext so neither the at-rest log nor any
+peer keeps a readable copy — same mechanism as the phone's protect-after-sync).
+A protected chat shows a lock screen; enter its PIN to decrypt it for that
+session. The chat list shows `🔒` placeholders
 (no content preview) until unlocked. Re-lock via the header button, or just
 restart — keys live only in memory. Chat metadata (name, tags, pinned, avatar)
 stays in plaintext so the list still renders.
@@ -147,7 +201,7 @@ Per-OS app data dir, under `ncy/`:
 
 - `identity.json` — this desktop's stable `deviceId` and display name
 - `pairings.json` — pairings, their secrets, and per-pairing sync watermarks
-- `settings.json` — port, name, theme
+- `settings.json` — port, device name, theme, `discoverable` (mDNS opt-in)
 - `events/<chatId>.ndjson` — one append-only event log per chat, byte-identical
   to the phone's `events.ndjson` lines
 - `blobs/<sha256>.<ext>` — content-addressed media (voice/image), shared across

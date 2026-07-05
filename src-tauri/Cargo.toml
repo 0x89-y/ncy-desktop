@@ -42,6 +42,7 @@ aes-gcm = "0.10"
 pbkdf2 = "0.12"
 
 # IO / utilities
+zip = "2"
 anyhow = "1.0"
 thiserror = "2.0"
 tracing = "0.1"

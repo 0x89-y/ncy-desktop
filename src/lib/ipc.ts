@@ -110,6 +110,16 @@ export type PairingDescriptor = {
   qrSvg: string;
 };
 
+/** An outbound peer this desktop syncs to (e.g. another desktop). */
+export type PeerView = {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  createdAt: number;
+  lastSeenAt: number | null;
+};
+
 export type AppSettings = {
   port: number;
   deviceName: string;
@@ -117,6 +127,9 @@ export type AppSettings = {
   /** When false (default), the desktop does not advertise over mDNS — it stays
    *  invisible to network scanners. Pairing still works via QR / pasted JSON. */
   discoverable: boolean;
+  /** One of "purple" / "blue" / "green" / "pink" / "orange" / "teal" — drives
+   *  the `[data-accent='…']` CSS preset applied to `document.documentElement`. */
+  accent: string;
 };
 
 export type DeviceIdentityView = {
@@ -145,6 +158,10 @@ export const api = {
   createPairing: (label: string) =>
     invoke<PairingDescriptor>("create_pairing", { label }),
   deletePairing: (id: string) => invoke<void>("delete_pairing", { id }),
+  addPeer: (payloadJson: string) =>
+    invoke<void>("add_peer", { payloadJson }),
+  listPeers: () => invoke<PeerView[]>("list_peers"),
+  deletePeer: (id: string) => invoke<void>("delete_peer", { id }),
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_settings", { settings }),
@@ -171,6 +188,8 @@ export const api = {
     invoke<void>("author_send_image", { chatId, sourcePath }),
   authorSendChecklist: (chatId: string, items: string[]) =>
     invoke<void>("author_send_checklist", { chatId, items }),
+  authorToggleChecklistItem: (chatId: string, messageId: string, itemId: string) =>
+    invoke<void>("author_toggle_checklist_item", { chatId, messageId, itemId }),
   authorUpdateChatMeta: (
     chatId: string,
     patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[] },
@@ -182,6 +201,8 @@ export const api = {
       isArchived: patch.isArchived ?? null,
       tags: patch.tags ?? null,
     }),
+  authorCreateChat: (name: string) =>
+    invoke<string>("author_create_chat", { name }),
   authorDeleteChat: (chatId: string) =>
     invoke<void>("author_delete_chat", { chatId }),
   authorSendMessage: (chatId: string, content: RichTextBlock[]) =>
@@ -191,10 +212,23 @@ export const api = {
   readBlob: (hash: string, mediaType: MediaType) =>
     invoke<string | null>("read_blob", { hash, mediaType }),
 
+  // Standalone backup / restore (desktop's own data — events + blobs).
+  exportBackup: (destPath: string) =>
+    invoke<void>("export_backup", { destPath }),
+  importBackup: (srcPath: string) =>
+    invoke<{ chats: number; events: number; blobs: number }>("import_backup", {
+      srcPath,
+    }),
+
   // Phase 3 — protected-chat unlock. `unlockChat` returns false on a wrong PIN.
   unlockChat: (chatId: string, pin: string) =>
     invoke<boolean>("unlock_chat", { chatId, pin }),
   lockChat: (chatId: string) => invoke<void>("lock_chat", { chatId }),
+  // #3 — protect a chat / change its PIN from the desktop.
+  protectChat: (chatId: string, pin: string) =>
+    invoke<void>("protect_chat", { chatId, pin }),
+  changeChatPin: (chatId: string, oldPin: string, newPin: string) =>
+    invoke<void>("change_chat_pin", { chatId, oldPin, newPin }),
 };
 
 /**

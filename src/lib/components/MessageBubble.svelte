@@ -51,6 +51,18 @@
     }
   }
 
+  async function toggleChecklistItem(itemId: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await api.authorToggleChecklistItem(message.chatId, message.id, itemId);
+    } catch (e) {
+      console.error("toggle checklist item failed", e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function deleteMessage() {
     if (busy) return;
     if (!confirm("Delete this message? This will sync the deletion back to the phone.")) return;
@@ -199,7 +211,12 @@
       <ul class="checklist">
         {#each message.checklistItems as item (item.id)}
           <li>
-            <input type="checkbox" checked={item.checked} disabled />
+            <input
+              type="checkbox"
+              checked={item.checked}
+              disabled={busy}
+              onchange={() => toggleChecklistItem(item.id)}
+            />
             <span class:done={item.checked}>{item.text}</span>
           </li>
         {/each}

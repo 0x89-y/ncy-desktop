@@ -4,6 +4,9 @@
   import {
     pairings,
     refreshPairings,
+    peers,
+    refreshPeers,
+    connectedPeers,
     lanIps,
     advertisedHost,
     refreshLanIps,
@@ -49,6 +52,32 @@
 
   async function refreshIps() {
     await refreshLanIps();
+  }
+
+  // --- Sync with another desktop (this device is the client). ---
+  let peerJson = $state("");
+  let peerBusy = $state(false);
+  let peerError = $state<string | null>(null);
+
+  async function addDesktop() {
+    if (peerBusy || !peerJson.trim()) return;
+    peerBusy = true;
+    peerError = null;
+    try {
+      await api.addPeer(peerJson.trim());
+      peerJson = "";
+      await refreshPeers();
+    } catch (e: any) {
+      peerError = typeof e === "string" ? e : (e?.message ?? "could not add peer");
+    } finally {
+      peerBusy = false;
+    }
+  }
+
+  async function removePeer(id: string) {
+    if (!confirm("Stop syncing with this desktop?")) return;
+    await api.deletePeer(id);
+    await refreshPeers();
   }
 </script>
 
@@ -144,6 +173,50 @@
       </div>
     {/each}
   </div>
+
+  <div class="card">
+    <h2>Sync with another desktop</h2>
+    <p class="muted tiny">
+      On the <em>other</em> desktop, create a pairing above and copy its JSON.
+      Paste it here — this desktop connects out to it. Either side can run the
+      pairing; the one you paste into is the client.
+    </p>
+    <textarea
+      class="peer-input"
+      placeholder={'{"v":1,"deviceId":"…","name":"…","host":"…","port":8765,"secret":"…"}'}
+      bind:value={peerJson}
+      rows="3"
+    ></textarea>
+    {#if peerError}
+      <div class="tiny err">{peerError}</div>
+    {/if}
+    <div class="row">
+      <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>
+        {peerBusy ? "Adding…" : "Add desktop"}
+      </button>
+    </div>
+
+    <div class="col list">
+      {#each $peers as p (p.id)}
+        {@const online = $connectedPeers.has(p.id)}
+        <div class="row peer">
+          <div class="col" style="flex:1; min-width:0;">
+            <strong>{p.label}</strong>
+            <span class="muted tiny">
+              {p.host}:{p.port}
+              {#if p.lastSeenAt} · last seen {formatFullTime(p.lastSeenAt)}{/if}
+            </span>
+          </div>
+          <span class="chip" class:active={online}>
+            {online ? "Connected" : "Offline"}
+          </span>
+          <button class="danger ghost" onclick={() => removePeer(p.id)}>Remove</button>
+        </div>
+      {:else}
+        <div class="muted tiny">No desktop peers yet.</div>
+      {/each}
+    </div>
+  </div>
 </div>
 
 <style>
@@ -197,4 +270,24 @@
   }
   .center { text-align: center; padding: 2rem; }
   .host { gap: .5rem; }
+  .peer-input {
+    width: 100%;
+    box-sizing: border-box;
+    margin: .5rem 0;
+    padding: .55rem .7rem;
+    border-radius: 10px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface-2);
+    color: inherit;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: .78rem;
+    resize: vertical;
+  }
+  .peer {
+    align-items: center;
+    gap: .6rem;
+    padding: .6rem .15rem;
+    border-top: 1px solid var(--outline-variant);
+  }
+  .err { color: var(--error, #b00); }
 </style>

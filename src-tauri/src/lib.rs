@@ -9,15 +9,16 @@ use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
 
 use crate::model::HlcTimestamp;
 use crate::storage::{
-    data_paths, load_pairings, AppSettings, DataPaths, DesktopIdentity, EventStore, PairingFile,
+    data_paths, load_pairings, load_peers, AppSettings, DataPaths, DesktopIdentity, EventStore,
+    PairingFile, PeerFile,
 };
 use crate::sync::{
-    run_server, BlobStore, DesktopClock, MdnsRegistration, OutboundEvent, OutboundTx,
-    ProtectionKeyStore, ServerContext, SyncEvent,
+    run_peer_supervisor, run_server, BlobStore, DesktopClock, MdnsRegistration, OutboundEvent,
+    OutboundTx, PeerSyncDeps, ProtectionKeyStore, ServerContext, SyncEvent,
 };
 
 /// Frontend-visible app state. Held by Tauri as a managed singleton.
@@ -43,6 +44,11 @@ pub struct AppState {
     /// so the `discoverable` setting can start/stop advertising at runtime without
     /// a restart.
     pub mdns: std::sync::Mutex<Option<MdnsRegistration>>,
+    /// Outbound peers this desktop connects to (the client role — e.g. another
+    /// desktop). The supervisor task reconciles this list with live connections.
+    pub peers: Arc<RwLock<PeerFile>>,
+    /// Signalled after `peers` changes so the supervisor reconciles immediately.
+    pub peer_notify: Arc<Notify>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -55,7 +61,17 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Track size/position/maximized/fullscreen but NOT decorations — we
+        // want `tauri.conf.json`'s `decorations: false` (frameless) to win, not
+        // a stale "decorated" value the plugin saved from an earlier build.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all()
+                        & !tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -84,6 +100,8 @@ pub fn run() {
             let settings = storage::settings::load(&paths.settings).unwrap_or_default();
             let identity = DesktopIdentity::load_or_create(&paths.identity, &settings.device_name)?;
             let pairings = load_pairings(&paths.pairings).unwrap_or_default();
+            let peers = Arc::new(RwLock::new(load_peers(&paths.peers).unwrap_or_default()));
+            let peer_notify = Arc::new(Notify::new());
             let events = Arc::new(EventStore::open(&paths.events)?);
             // Trim oversized event logs once per launch — silent no-op for small chats.
             if let Err(e) = storage::compaction::run_if_needed(&events) {
@@ -142,6 +160,8 @@ pub fn run() {
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
                 mdns: std::sync::Mutex::new(mdns),
+                peers: peers.clone(),
+                peer_notify: peer_notify.clone(),
             };
 
             let port = settings.port;
@@ -180,6 +200,24 @@ pub fn run() {
                         message: e.to_string(),
                     });
                 }
+            });
+
+            // Spawn the outbound-peer supervisor (desktop↔desktop client role).
+            // It reconciles `peers.json` with live connections; `peer_notify`
+            // wakes it when a peer is added/removed.
+            let peer_deps = Arc::new(PeerSyncDeps {
+                identity_device_id: state.identity_device_id.clone(),
+                events: events.clone(),
+                bus: bus.clone(),
+                clock: clock.clone(),
+                outbound: outbound.clone(),
+                blobs: blobs.clone(),
+                peers: peers.clone(),
+                peers_path: state.paths.peers.clone(),
+            });
+            let peer_notify_for_sup = peer_notify.clone();
+            tauri::async_runtime::spawn(async move {
+                run_peer_supervisor(peer_deps, peer_notify_for_sup).await;
             });
 
             // Forward sync events to the webview.
@@ -228,6 +266,9 @@ pub fn run() {
             commands::list_pairings,
             commands::create_pairing,
             commands::delete_pairing,
+            commands::add_peer,
+            commands::list_peers,
+            commands::delete_peer,
             commands::get_settings,
             commands::update_settings,
             commands::list_lan_ips,
@@ -242,11 +283,17 @@ pub fn run() {
             commands::author_delete_message,
             commands::author_send_image,
             commands::author_send_checklist,
+            commands::author_toggle_checklist_item,
+            commands::author_create_chat,
             commands::author_update_chat_meta,
             commands::author_delete_chat,
             commands::read_blob,
+            commands::export_backup,
+            commands::import_backup,
             commands::unlock_chat,
             commands::lock_chat,
+            commands::protect_chat,
+            commands::change_chat_pin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

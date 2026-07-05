@@ -2,6 +2,7 @@
   import { activeChat, refreshActiveChat, refreshChats, selectChat } from "../stores/app";
   import { api, extractMediaHash } from "../ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
@@ -130,6 +131,118 @@
     });
   }
 
+  // ----- Compose right-click menu: formatting + clipboard -----
+  // Replaces the native menu in the compose box. Selection is snapshotted on
+  // open (it survives the right-click but the menu would steal focus).
+  let composeMenu = $state<{ x: number; y: number; selStart: number; selEnd: number } | null>(null);
+  let composeMenuEl: HTMLDivElement | undefined = $state();
+
+  function openComposeMenu(e: MouseEvent) {
+    if (sending || !composeTextarea) return; // disabled → fall back to native
+    e.preventDefault();
+    const ta = composeTextarea;
+    const selStart = ta.selectionStart ?? 0;
+    const selEnd = ta.selectionEnd ?? selStart;
+    // Raw click point; the $effect below measures the rendered menu and clamps
+    // it fully on-screen (the compose box sits at the bottom, so it usually
+    // needs to open upward).
+    composeMenu = { x: e.clientX, y: e.clientY, selStart, selEnd };
+  }
+
+  // Keep the menu inside the viewport once it has a real size.
+  $effect(() => {
+    const m = composeMenu;
+    const el = composeMenuEl;
+    if (!m || !el) return;
+    const pad = 8;
+    const r = el.getBoundingClientRect();
+    const left = Math.max(pad, Math.min(m.x, window.innerWidth - r.width - pad));
+    const top = Math.max(pad, Math.min(m.y, window.innerHeight - r.height - pad));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+  });
+  function closeComposeMenu() {
+    composeMenu = null;
+  }
+
+  function restoreSelection() {
+    const m = composeMenu;
+    if (!m || !composeTextarea) return;
+    composeTextarea.focus();
+    composeTextarea.setSelectionRange(m.selStart, m.selEnd);
+  }
+
+  // Formatting items: restore the snapshot selection, then reuse the existing
+  // apply* helpers (they read + re-set the selection themselves).
+  function menuFormat(fn: () => void) {
+    restoreSelection();
+    fn();
+    closeComposeMenu();
+  }
+
+  async function menuCopy() {
+    const m = composeMenu;
+    if (!m) return;
+    const text = composeText.slice(m.selStart, m.selEnd);
+    closeComposeMenu();
+    if (!text) return;
+    try {
+      await writeText(text);
+    } catch (e) {
+      console.error("copy failed", e);
+    }
+  }
+
+  async function menuCut() {
+    const m = composeMenu;
+    if (!m) return;
+    const { selStart, selEnd } = m;
+    const text = composeText.slice(selStart, selEnd);
+    closeComposeMenu();
+    if (!text) return;
+    try {
+      await writeText(text);
+    } catch (e) {
+      console.error("cut failed", e);
+      return;
+    }
+    composeText = composeText.slice(0, selStart) + composeText.slice(selEnd);
+    queueMicrotask(() => {
+      if (!composeTextarea) return;
+      composeTextarea.focus();
+      composeTextarea.setSelectionRange(selStart, selStart);
+    });
+  }
+
+  async function menuPaste() {
+    const m = composeMenu;
+    if (!m) return;
+    const { selStart, selEnd } = m;
+    closeComposeMenu();
+    let clip = "";
+    try {
+      clip = (await readText()) ?? "";
+    } catch (e) {
+      console.error("paste failed", e);
+      return;
+    }
+    if (!clip) return;
+    composeText = composeText.slice(0, selStart) + clip + composeText.slice(selEnd);
+    const caret = selStart + clip.length;
+    queueMicrotask(() => {
+      if (!composeTextarea) return;
+      composeTextarea.focus();
+      composeTextarea.setSelectionRange(caret, caret);
+    });
+  }
+
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && composeMenu) {
+      e.preventDefault();
+      closeComposeMenu();
+    }
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     // Ctrl/Cmd-B / -I — standard formatting shortcuts.
     const mod = e.ctrlKey || e.metaKey;
@@ -225,6 +338,53 @@
       console.error("update chat meta failed", e);
     } finally {
       metaBusy = false;
+    }
+  }
+
+  // ----- Protect chat / change PIN (#3) -----
+  let pinMode = $state<null | "protect" | "change">(null);
+  let pinOld = $state("");
+  let pin1 = $state("");
+  let pin2 = $state("");
+  let pinBusy = $state(false);
+  let pinError = $state<string | null>(null);
+
+  function openPin(mode: "protect" | "change") {
+    pinMode = mode;
+    pinOld = "";
+    pin1 = "";
+    pin2 = "";
+    pinError = null;
+    menuOpen = false;
+  }
+  function cancelPin() {
+    pinMode = null;
+    pinOld = "";
+    pin1 = "";
+    pin2 = "";
+    pinError = null;
+  }
+  async function savePin() {
+    const c = $activeChat;
+    if (!c || pinBusy) return;
+    if (!pin1) { pinError = "PIN cannot be empty"; return; }
+    if (pin1 !== pin2) { pinError = "PINs don't match"; return; }
+    if (pinMode === "change" && !pinOld) { pinError = "Enter the current PIN"; return; }
+    pinBusy = true;
+    pinError = null;
+    try {
+      if (pinMode === "protect") {
+        await api.protectChat(c.metadata.id, pin1);
+      } else {
+        await api.changeChatPin(c.metadata.id, pinOld, pin1);
+      }
+      await refreshActiveChat();
+      await refreshChats();
+      cancelPin();
+    } catch (e: any) {
+      pinError = typeof e === "string" ? e : (e?.message ?? "failed");
+    } finally {
+      pinBusy = false;
     }
   }
 
@@ -346,6 +506,11 @@
               {chat.metadata.isArchived ? "Unarchive" : "Archive"}
             </button>
             <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
+            {#if chat.metadata.isProtected}
+              <button type="button" onclick={() => openPin("change")}>Change PIN…</button>
+            {:else}
+              <button type="button" onclick={() => openPin("protect")}>Protect chat…</button>
+            {/if}
             <button type="button" class="danger" onclick={deleteChat}>Delete chat</button>
           </div>
         {/if}
@@ -369,6 +534,47 @@
         </button>
         <button type="button" class="text-btn" onclick={cancelEdit}>Cancel</button>
       </div>
+    {/if}
+
+    {#if pinMode}
+      <div class="meta-editor pin-editor">
+        {#if pinMode === "change"}
+          <input
+            class="meta-input"
+            type="password"
+            placeholder="Current PIN"
+            bind:value={pinOld}
+            disabled={pinBusy}
+            onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); cancelPin(); } }}
+          />
+        {/if}
+        <input
+          class="meta-input"
+          type="password"
+          placeholder="New PIN"
+          bind:value={pin1}
+          disabled={pinBusy}
+          onkeydown={(e) => { if (e.key === "Escape") { e.preventDefault(); cancelPin(); } }}
+        />
+        <input
+          class="meta-input"
+          type="password"
+          placeholder="Confirm PIN"
+          bind:value={pin2}
+          disabled={pinBusy}
+          onkeydown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void savePin(); }
+            if (e.key === "Escape") { e.preventDefault(); cancelPin(); }
+          }}
+        />
+        <button type="button" class="send" onclick={savePin} disabled={pinBusy}>
+          {pinBusy ? "…" : (pinMode === "protect" ? "Protect" : "Change")}
+        </button>
+        <button type="button" class="text-btn" onclick={cancelPin}>Cancel</button>
+      </div>
+      {#if pinError}
+        <div class="meta-editor"><span class="compose-error tiny">{pinError}</span></div>
+      {/if}
     {/if}
 
     {#if chat.metadata.isProtected && !chat.isUnlocked}
@@ -449,17 +655,6 @@
           </div>
         </div>
       {/if}
-      <div class="toolbar">
-        <button type="button" title="Bold (Ctrl+B)" disabled={sending} onclick={() => applyWrap("**")}><b>B</b></button>
-        <button type="button" title="Italic (Ctrl+I)" disabled={sending} onclick={() => applyWrap("*")}><i>I</i></button>
-        <button type="button" title="Strikethrough" disabled={sending} onclick={() => applyWrap("~~")}><s>S</s></button>
-        <span class="sep"></span>
-        <button type="button" title="Heading 1" disabled={sending} onclick={() => applyLinePrefix("# ")}>H1</button>
-        <button type="button" title="Heading 2" disabled={sending} onclick={() => applyLinePrefix("## ")}>H2</button>
-        <button type="button" title="Heading 3" disabled={sending} onclick={() => applyLinePrefix("### ")}>H3</button>
-        <button type="button" title="Bullet list" disabled={sending} onclick={() => applyLinePrefix("- ")}>• List</button>
-        <button type="button" title="Code block" disabled={sending} onclick={insertCodeBlock}>{"</>"}</button>
-      </div>
       <div class="compose-row">
         <button
           type="button"
@@ -481,10 +676,11 @@
         </button>
         <textarea
           class="compose-input"
-          placeholder="Type a message…  (Enter to send, Shift+Enter for newline)"
+          placeholder="Type a message…"
           bind:this={composeTextarea}
           bind:value={composeText}
           onkeydown={onKeyDown}
+          oncontextmenu={openComposeMenu}
           disabled={sending}
           rows="1"
         ></textarea>
@@ -509,10 +705,45 @@
   </div>
 {/if}
 
+<svelte:window onkeydown={onWindowKey} />
+
+{#if composeMenu}
+  {@const hasSel = composeMenu.selStart !== composeMenu.selEnd}
+  <button
+    type="button"
+    class="ctx-backdrop"
+    aria-label="Close menu"
+    onclick={closeComposeMenu}
+    oncontextmenu={(e) => { e.preventDefault(); closeComposeMenu(); }}
+  ></button>
+  <div
+    class="ctx-menu"
+    role="menu"
+    bind:this={composeMenuEl}
+    style={`left:${composeMenu.x}px; top:${composeMenu.y}px;`}
+  >
+    <button type="button" disabled={!hasSel} onclick={menuCut}>Cut</button>
+    <button type="button" disabled={!hasSel} onclick={menuCopy}>Copy</button>
+    <button type="button" onclick={menuPaste}>Paste</button>
+    <div class="ctx-sep"></div>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("**"))}><b>Bold</b></button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("*"))}><i>Italic</i></button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("~~"))}><s>Strikethrough</s></button>
+    <div class="ctx-sep"></div>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("# "))}>Heading 1</button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("## "))}>Heading 2</button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("### "))}>Heading 3</button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("- "))}>Bullet list</button>
+    <button type="button" disabled={!hasSel} onclick={() => menuFormat(insertCodeBlock)}>Code block</button>
+  </div>
+{/if}
+
 <style>
   .wrap {
     height: 100%;
-    background: var(--bg);
+    /* Transparent so the body dot-grid shows behind bubbles, mirroring Acy's
+       "nav over grid, content shows grid" composition. */
+    background: transparent;
   }
   .header {
     padding: .9rem 1rem;
@@ -627,36 +858,53 @@
     opacity: .45;
     cursor: default;
   }
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: .15rem;
-    flex-wrap: wrap;
-  }
-  .toolbar button {
-    padding: .15rem .45rem;
-    border-radius: 8px;
-    border: 1px solid transparent;
+  .ctx-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    border: none;
+    padding: 0;
+    margin: 0;
     background: transparent;
+    cursor: default;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--outline-variant);
+    border-radius: 12px;
+    box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25));
+    padding: .25rem;
+    box-sizing: border-box;
+    /* Safety net if the menu is ever taller than the window. */
+    max-height: calc(100vh - 1rem);
+    overflow-y: auto;
+  }
+  .ctx-menu button {
+    background: transparent;
+    border: none;
     color: inherit;
     font: inherit;
-    font-size: .85rem;
+    text-align: left;
+    padding: .45rem .7rem;
+    border-radius: 8px;
     cursor: pointer;
-    line-height: 1.2;
   }
-  .toolbar button:hover:not(:disabled) {
+  .ctx-menu button:hover:not(:disabled) {
     background: var(--surface-2, var(--surface));
-    border-color: var(--outline-variant);
   }
-  .toolbar button:disabled {
+  .ctx-menu button:disabled {
     opacity: .4;
     cursor: default;
   }
-  .toolbar .sep {
-    width: 1px;
-    height: 1rem;
+  .ctx-sep {
+    height: 1px;
     background: var(--outline-variant);
-    margin: 0 .25rem;
+    margin: .25rem .35rem;
   }
   .compose-error {
     color: var(--error, #b00);
@@ -773,6 +1021,7 @@
     border-bottom: 1px solid var(--outline-variant);
     background: var(--surface);
   }
+  .pin-editor { flex-wrap: wrap; }
   .meta-input {
     flex: 1;
     padding: .45rem .6rem;

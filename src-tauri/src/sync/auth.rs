@@ -12,6 +12,18 @@ pub fn random_nonce_b64() -> String {
     B64.encode(nonce)
 }
 
+/// Client side of the handshake: sign a server-issued challenge nonce with the
+/// pairing secret. Returns base64(HMAC-SHA256(secret, nonceBytes)) — exactly what
+/// the phone's `SyncClient.sign` produces and what [verify_auth] checks. `None`
+/// if either input isn't valid base64.
+pub fn sign_auth(secret_b64: &str, nonce_b64: &str) -> Option<String> {
+    let secret = B64.decode(secret_b64).ok()?;
+    let nonce = B64.decode(nonce_b64).ok()?;
+    let mut mac = HmacSha256::new_from_slice(&secret).ok()?;
+    mac.update(&nonce);
+    Some(B64.encode(mac.finalize().into_bytes()))
+}
+
 /// Constant-time check of a phone-supplied auth tag against the expected
 /// HMAC-SHA256(secret, nonceBytes). Inputs are base64 strings as they arrive on
 /// the wire (per protocol §5).
