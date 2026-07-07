@@ -1,8 +1,10 @@
 pub mod commands;
-pub mod model;
-pub mod network;
-pub mod storage;
-pub mod sync;
+
+// The core modules now live in the shared `ncy-core` crate. Re-export them under
+// this crate's root so the existing `crate::model::…` / `crate::storage::…` /
+// `crate::sync::…` / `crate::network::…` paths throughout `commands.rs` keep
+// resolving unchanged.
+pub use ncy_core::{model, network, storage, sync};
 
 use std::sync::Arc;
 

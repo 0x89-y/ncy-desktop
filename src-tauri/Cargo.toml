@@ -13,6 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0.3", features = [] }
 
 [dependencies]
+# The UI-agnostic core (event log, sync engine, storage, transcription) lives in
+# its own crate, shared with the headless `ncy-server`. Path dep for local dev;
+# switch to a pinned git dep for CI/release.
+ncy-core = { path = "../../ncy-core" }
+
 tauri = { version = "2.1.1", features = ["tray-icon"] }
 tauri-plugin-clipboard-manager = "2.0.1"
 tauri-plugin-dialog = "2.0.1"
@@ -20,42 +25,18 @@ tauri-plugin-shell = "2.0.1"
 tauri-plugin-window-state = "2"
 tauri-plugin-notification = "2"
 
-# WebSocket sync server
+# Async runtime (command handlers use tokio::sync + spawn_blocking).
 tokio = { version = "1.41", features = ["full"] }
-tokio-tungstenite = "0.24"
-futures-util = "0.3"
 
-# Serialization
+# Serialization — commands.rs builds/parses JSON directly.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Crypto / encoding
-hmac = "0.12"
-sha2 = "0.10"
-subtle = "2.6"
+# Used directly by the command layer.
 base64 = "0.22"
-rand = "0.8"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 qrcode = "0.14"
-# Phase 3 — protected-chat encryption.
-aes-gcm = "0.10"
-pbkdf2 = "0.12"
-
-# IO / utilities
 zip = "2"
 anyhow = "1.0"
-thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-hostname = "0.4"
-
-# Networking helpers
-local-ip-address = "0.6"
-mdns-sd = "0.11"
-
-# Voice-message transcription — pure-Rust audio decoder + HTTP fetcher for the
-# model file. Whisper engine itself is TBD pending toolchain decision (whisper-rs
-# needs libclang at build time; a bundled whisper.cpp binary is the alternative).
-symphonia = { version = "0.5", features = ["aac", "isomp4", "pcm", "wav"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
-futures-core = "0.3"

@@ -2563,7 +2563,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ncy-desktop"
+name = "ncy-core"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
@@ -2584,6 +2584,24 @@ dependencies = [
  "sha2",
  "subtle",
  "symphonia",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "uuid",
+ "zip",
+]
+
+[[package]]
+name = "ncy-desktop"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "ncy-core",
+ "qrcode",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -2591,9 +2609,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-shell",
  "tauri-plugin-window-state",
- "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "tracing-subscriber",
  "uuid",
