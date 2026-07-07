@@ -18,6 +18,13 @@
   let label = $state("");
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
+  // Per-pairing "Show pairing info" toggle. Claimed pairings hide the QR + JSON
+  // by default (they're only needed for the first pairing handshake); the user
+  // can reveal them here if they need to re-pair a lost phone from scratch.
+  let revealed = $state<Record<string, boolean>>({});
+  function toggleReveal(id: string) {
+    revealed = { ...revealed, [id]: !revealed[id] };
+  }
 
   async function create() {
     if (busy) return;
@@ -81,7 +88,8 @@
   }
 </script>
 
-<div class="page scroll">
+<div class="page-scroll scroll">
+ <div class="page">
   <header class="row top">
     <div class="col" style="flex:1">
       <h1>Pair a phone</h1>
@@ -135,6 +143,7 @@
   <div class="col list">
     {#each $pairings as p (p.pairing.id)}
       {@const claimed = p.pairing.phoneId !== null}
+      {@const showBox = !claimed || revealed[p.pairing.id]}
       <div class="card pairing">
         <div class="row" style="justify-content:space-between">
           <div class="col">
@@ -148,24 +157,31 @@
             <span class="chip" class:active={claimed}>
               {claimed ? `Paired${p.pairing.phoneId ? ` · ${p.pairing.phoneId.slice(0, 8)}` : ""}` : "Awaiting phone"}
             </span>
+            {#if claimed}
+              <button class="ghost" onclick={() => toggleReveal(p.pairing.id)}>
+                {showBox ? "Hide pairing info" : "Show pairing info"}
+              </button>
+            {/if}
             <button class="danger ghost" onclick={() => remove(p.pairing.id)}>Remove</button>
           </div>
         </div>
 
-        <div class="row qrbox">
-          <div class="qr" aria-label="Pairing QR">
-            {@html p.qrSvg}
-          </div>
-          <div class="col json-box" style="flex:1; min-width:0;">
-            <code class="json-pre">{p.payloadJson}</code>
-            <div class="row">
-              <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
-                Copy JSON
-              </button>
-              {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
+        {#if showBox}
+          <div class="row qrbox">
+            <div class="qr" aria-label="Pairing QR">
+              {@html p.qrSvg}
+            </div>
+            <div class="col json-box" style="flex:1; min-width:0;">
+              <code class="json-pre">{p.payloadJson}</code>
+              <div class="row">
+                <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
+                  Copy JSON
+                </button>
+                {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
+              </div>
             </div>
           </div>
-        </div>
+        {/if}
       </div>
     {:else}
       <div class="card muted center">
@@ -217,11 +233,17 @@
       {/each}
     </div>
   </div>
+ </div>
 </div>
 
 <style>
-  .page {
+  /* Full-width scroller so the scrollbar hugs the window's right edge, while
+     the content itself stays centered inside a narrower column. */
+  .page-scroll {
     height: 100%;
+    width: 100%;
+  }
+  .page {
     padding: 1.5rem;
     display: flex;
     flex-direction: column;

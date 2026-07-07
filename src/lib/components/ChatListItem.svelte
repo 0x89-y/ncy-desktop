@@ -2,6 +2,7 @@
   import type { ChatSummary } from "../ipc";
   import Avatar from "./Avatar.svelte";
   import { formatTime } from "../format";
+  import { Pin, Lock } from "@lucide/svelte";
 
   let {
     chat,
@@ -21,8 +22,8 @@
   <div class="middle">
     <div class="row top">
       <span class="title" title={chat.name}>
-        {#if chat.isPinned}<span class="pin">📌</span>{/if}
-        {#if chat.isProtected}<span class="lock">🔒</span>{/if}
+        {#if chat.isPinned}<span class="badge-ico"><Pin size={12} strokeWidth={2.25} /></span>{/if}
+        {#if chat.isProtected}<span class="badge-ico"><Lock size={12} strokeWidth={2.25} /></span>{/if}
         {chat.name}
       </span>
       <span class="muted tiny time">{formatTime(chat.lastMessageAt)}</span>
@@ -74,6 +75,13 @@
     min-width: 0;
   }
   .time { white-space: nowrap; }
-  .pin, .lock { margin-right: .15rem; }
+  .badge-ico {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-muted);
+    margin-right: .2rem;
+    line-height: 0;
+    vertical-align: -1px;
+  }
   .tags { flex-wrap: wrap; gap: .25rem; }
 </style>

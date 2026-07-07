@@ -3,6 +3,7 @@ pub mod eventlog;
 pub mod identity;
 pub mod materialize;
 pub mod settings;
+pub mod whisper;
 
 pub use eventlog::EventStore;
 pub use identity::{

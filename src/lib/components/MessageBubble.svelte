@@ -1,9 +1,17 @@
 <script lang="ts">
   import type { Message } from "../ipc";
   import { api, extractMediaHash } from "../ipc";
-  import { arrivedBlobs } from "../stores/app";
+  import {
+    arrivedBlobs,
+    transcribing,
+    transcriptionErrors,
+    markTranscribing,
+    unmarkTranscribing,
+    setTranscriptionError,
+  } from "../stores/app";
   import RichText from "./RichText.svelte";
   import { formatFullTime } from "../format";
+  import { Mic, Image as ImageIcon, AlarmClock } from "@lucide/svelte";
 
   let {
     message,
@@ -29,6 +37,124 @@
   let editing = $state(false);
   let editText = $state("");
   let editError = $state<string | null>(null);
+  let reminding = $state(false);
+  let reminderInput = $state("");
+
+  // Right-click context menu (replaces the always-visible action row).
+  let ctx = $state<{ x: number; y: number } | null>(null);
+  function openCtx(e: MouseEvent) {
+    if (editing || reminding) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Menu is ~180×180; keep it on-screen.
+    const x = Math.min(e.clientX, window.innerWidth - 190);
+    const y = Math.min(e.clientY, window.innerHeight - 190);
+    ctx = { x, y };
+  }
+  function closeCtx() { ctx = null; }
+
+  // Reactions — curated quick strip + an extended set behind a toggle.
+  const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "✅", "🔥"];
+  const EXTRA_REACTIONS = [
+    "🙏", "👀", "🤔", "😮", "😢", "😡",
+    "💯", "⭐", "🚀", "💡", "👏", "🤝",
+    "😍", "🥳", "🤯", "😅", "🙌", "✨",
+  ];
+  let showExtras = $state(false);
+  // Hover strip is only revealed after a small settle (avoids flickering when
+  // scanning down a chat) and hides when the pointer leaves both the bubble
+  // and the strip itself.
+  let hovering = $state(false);
+  // Picker popover triggered by the ⋯ button or by "React…" in the ctx menu —
+  // stays open even after the pointer leaves so the user can browse the extras.
+  let pickerOpen = $state(false);
+
+  async function toggleReaction(emoji: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await api.authorToggleReaction(message.chatId, message.id, emoji);
+    } catch (e) {
+      console.error("toggle reaction failed", e);
+    } finally {
+      busy = false;
+    }
+  }
+  function pickReaction(emoji: string) {
+    pickerOpen = false;
+    showExtras = false;
+    void toggleReaction(emoji);
+  }
+  function openPickerFromMenu() {
+    closeCtx();
+    pickerOpen = true;
+  }
+
+  const isTranscribing = $derived($transcribing.has(message.id));
+  const transcriptionError = $derived($transcriptionErrors[message.id] ?? null);
+
+  async function transcribeThis() {
+    if (message.type !== "VOICE") {
+      console.warn("transcribeThis: not a voice message", message.type);
+      return;
+    }
+    if ($transcribing.has(message.id)) {
+      console.warn("transcribeThis: already in flight");
+      return;
+    }
+    console.log("transcribeThis: starting", message.chatId, message.id);
+    markTranscribing(message.id);
+    try {
+      await api.authorTranscribeVoice(message.chatId, message.id);
+      console.log("transcribeThis: done");
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : (e?.message ?? String(e));
+      console.error("transcribeThis failed:", msg, e);
+      setTranscriptionError(message.id, msg);
+    } finally {
+      unmarkTranscribing(message.id);
+    }
+  }
+
+  // ISO `yyyy-MM-ddTHH:mm` for the datetime-local input, in local time.
+  function toLocalIsoMinutes(ms: number): string {
+    const d = new Date(ms);
+    const off = d.getTimezoneOffset();
+    const local = new Date(d.getTime() - off * 60000);
+    return local.toISOString().slice(0, 16);
+  }
+  function startReminder() {
+    const seed = message.reminderAt ?? Date.now() + 60 * 60 * 1000; // +1h default
+    reminderInput = toLocalIsoMinutes(seed);
+    reminding = true;
+  }
+  function cancelReminder() { reminding = false; }
+  async function saveReminder() {
+    if (busy) return;
+    const ms = new Date(reminderInput).getTime();
+    if (!Number.isFinite(ms)) return;
+    busy = true;
+    try {
+      await api.authorSetReminder(message.chatId, message.id, ms);
+      reminding = false;
+    } catch (e) {
+      console.error("set reminder failed", e);
+    } finally {
+      busy = false;
+    }
+  }
+  async function clearReminder() {
+    if (busy) return;
+    busy = true;
+    try {
+      await api.authorSetReminder(message.chatId, message.id, null);
+      reminding = false;
+    } catch (e) {
+      console.error("clear reminder failed", e);
+    } finally {
+      busy = false;
+    }
+  }
 
   // Flatten the message's rich text into a single plain string. Mirrors what the
   // phone's edit-saving path produces — phase 2a only supports plaintext edits
@@ -183,15 +309,48 @@
   });
 </script>
 
-<div class="row-wrap">
-  <div class="bubble" style={bubbleStyle}>
+<div
+  class="row-wrap"
+  onmouseenter={() => (hovering = true)}
+  onmouseleave={() => (hovering = false)}
+  role="group"
+>
+  {#if hovering && !editing && !reminding && !pickerOpen}
+    <!-- Hover quick-reactions strip, Slack-style, floating above the bubble. -->
+    <div class="hover-strip">
+      {#each QUICK_REACTIONS as e (e)}
+        <button
+          type="button"
+          class="rx-quick"
+          class:on={message.reactions.includes(e)}
+          disabled={busy}
+          title={message.reactions.includes(e) ? `Remove ${e}` : `React ${e}`}
+          onclick={() => void toggleReaction(e)}
+        >{e}</button>
+      {/each}
+      <button
+        type="button"
+        class="rx-quick more"
+        disabled={busy}
+        title="More reactions"
+        aria-label="More reactions"
+        onclick={() => (pickerOpen = true)}
+      >⋯</button>
+    </div>
+  {/if}
+  <div
+    class="bubble"
+    style={bubbleStyle}
+    role="group"
+    oncontextmenu={openCtx}
+  >
     {#if message.type === "VOICE"}
       <div class="voice">
         {#if voiceDataUrl}
           <audio controls preload="none" src={voiceDataUrl}></audio>
         {:else if voiceHash}
           <div class="row muted tiny">
-            <span class="icon">🎙️</span>
+            <span class="icon"><Mic size={14} strokeWidth={2.25} /></span>
             <span>
               {#if voiceMissing}
                 Voice message · not on this device
@@ -202,8 +361,18 @@
           </div>
         {:else}
           <div class="row muted tiny">
-            <span class="icon">🎙️</span>
+            <span class="icon"><Mic size={14} strokeWidth={2.25} /></span>
             <span>Voice message{message.voiceDurationMs ? ` · ${Math.round(message.voiceDurationMs / 1000)}s` : ""}</span>
+          </div>
+        {/if}
+        {#if isTranscribing}
+          <div class="transcript-loading tiny muted">Transcribing…</div>
+        {:else if message.transcript}
+          <div class="transcript tiny">{message.transcript}</div>
+        {/if}
+        {#if transcriptionError}
+          <div class="transcript-error tiny">
+            Transcription failed: {transcriptionError}
           </div>
         {/if}
       </div>
@@ -225,12 +394,14 @@
       {#if imageDataUrl}
         <img class="image" src={imageDataUrl} alt="" />
       {:else if imageHash}
-        <div class="image-placeholder muted tiny">
-          🖼️ {imageMissing ? "Image · not on this device" : "Image · downloading…"}
+        <div class="image-placeholder muted tiny row">
+          <ImageIcon size={14} strokeWidth={2.25} />
+          <span>{imageMissing ? "Image · not on this device" : "Image · downloading…"}</span>
         </div>
       {:else}
-        <div class="image-placeholder muted tiny">
-          🖼️ Image (legacy reference, not transferable)
+        <div class="image-placeholder muted tiny row">
+          <ImageIcon size={14} strokeWidth={2.25} />
+          <span>Image (legacy reference, not transferable)</span>
         </div>
       {/if}
     {:else if editing}
@@ -265,54 +436,249 @@
       </div>
     {/if}
 
+    {#if message.reactions.length}
+      <div class="row reactions">
+        {#each message.reactions as e (e)}
+          <button
+            type="button"
+            class="rx-chip"
+            disabled={busy}
+            title={`Remove ${e}`}
+            onclick={() => void toggleReaction(e)}
+          >{e}</button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="row meta tiny muted">
       <span>{time}</span>
       {#if message.editedAt}
         <span title="edited">· edited</span>
       {/if}
-      {#if message.reminderAt}
-        <span class="reminder" title={"Reminder: " + formatFullTime(message.reminderAt)}>⏰</span>
-      {/if}
       <span class="spacer"></span>
-      {#if message.type === "TEXT" && !editing}
-        <button
-          type="button"
-          class="action"
-          title="Edit (syncs back to phone)"
-          disabled={busy}
-          onclick={startEdit}
-        >
-          ✎
-        </button>
+      <!-- Passive indicators — actions live in the right-click menu. -->
+      {#if message.isStarred}
+        <span class="indicator starred" title="Starred" aria-label="Starred">★</span>
       {/if}
-      <button
-        type="button"
-        class="action"
-        class:starred={message.isStarred}
-        title={message.isStarred ? "Unstar" : "Star"}
-        disabled={busy}
-        onclick={toggleStar}
-      >
-        {message.isStarred ? "★" : "☆"}
-      </button>
-      <button
-        type="button"
-        class="action danger"
-        title="Delete (syncs back to phone)"
-        disabled={busy}
-        onclick={deleteMessage}
-      >
-        ✕
-      </button>
+      {#if message.reminderAt}
+        <span class="indicator starred" title="Reminder set" aria-label="Reminder set">
+          <AlarmClock size={13} strokeWidth={2.25} />
+        </span>
+      {/if}
     </div>
+
+    {#if reminding}
+      <div class="reminder-editor">
+        <input
+          type="datetime-local"
+          class="reminder-input"
+          bind:value={reminderInput}
+          disabled={busy}
+        />
+        <button class="action-btn primary" onclick={saveReminder} disabled={busy || !reminderInput}>
+          Save
+        </button>
+        {#if message.reminderAt}
+          <button class="action-btn" onclick={clearReminder} disabled={busy}>Clear</button>
+        {/if}
+        <button class="action-btn" onclick={cancelReminder} disabled={busy}>Cancel</button>
+      </div>
+    {/if}
   </div>
 </div>
+
+{#if ctx}
+  <button
+    type="button"
+    class="ctx-backdrop"
+    aria-label="Close menu"
+    onclick={closeCtx}
+    oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }}
+  ></button>
+  <div class="ctx-menu" role="menu" style={`left:${ctx.x}px; top:${ctx.y}px;`}>
+    <button
+      type="button"
+      disabled={busy}
+      onclick={openPickerFromMenu}
+    >React…</button>
+    {#if message.type === "TEXT"}
+      <button
+        type="button"
+        disabled={busy}
+        onclick={() => { closeCtx(); startEdit(); }}
+      >Edit…</button>
+    {/if}
+    {#if message.type === "VOICE"}
+      <button
+        type="button"
+        disabled={busy || isTranscribing}
+        onclick={() => { closeCtx(); void transcribeThis(); }}
+      >{message.transcript ? "Re-transcribe" : "Transcribe"}</button>
+    {/if}
+    <button
+      type="button"
+      disabled={busy}
+      onclick={() => { closeCtx(); void toggleStar(); }}
+    >{message.isStarred ? "Unstar" : "Star"}</button>
+    <button
+      type="button"
+      disabled={busy}
+      onclick={() => { closeCtx(); startReminder(); }}
+    >{message.reminderAt ? "Change reminder…" : "Set reminder…"}</button>
+    {#if message.reminderAt}
+      <button
+        type="button"
+        disabled={busy}
+        onclick={() => { closeCtx(); void clearReminder(); }}
+      >Clear reminder</button>
+    {/if}
+    <hr class="ctx-sep" />
+    <button
+      type="button"
+      class="danger"
+      disabled={busy}
+      onclick={() => { closeCtx(); void deleteMessage(); }}
+    >Delete</button>
+  </div>
+{/if}
+
+{#if pickerOpen}
+  <button
+    type="button"
+    class="ctx-backdrop"
+    aria-label="Close picker"
+    onclick={() => { pickerOpen = false; showExtras = false; }}
+    oncontextmenu={(e) => { e.preventDefault(); pickerOpen = false; showExtras = false; }}
+  ></button>
+  <div class="rx-picker" role="dialog" aria-label="Pick a reaction">
+    <div class="rx-picker-row">
+      {#each QUICK_REACTIONS as e (e)}
+        <button
+          type="button"
+          class="rx-quick"
+          class:on={message.reactions.includes(e)}
+          disabled={busy}
+          onclick={() => pickReaction(e)}
+        >{e}</button>
+      {/each}
+      <button
+        type="button"
+        class="rx-quick more"
+        disabled={busy}
+        aria-label={showExtras ? "Fewer reactions" : "More reactions"}
+        onclick={() => (showExtras = !showExtras)}
+      >{showExtras ? "▲" : "▼"}</button>
+    </div>
+    {#if showExtras}
+      <div class="rx-picker-grid">
+        {#each EXTRA_REACTIONS as e (e)}
+          <button
+            type="button"
+            class="rx-quick"
+            class:on={message.reactions.includes(e)}
+            disabled={busy}
+            onclick={() => pickReaction(e)}
+          >{e}</button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .row-wrap {
     display: flex;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: flex-end;
     margin-bottom: .35rem;
+    position: relative;
+  }
+  /* Slack-style floating quick-reactions strip that appears on hover, above
+     the bubble. Absolutely positioned so its show/hide doesn't reflow the
+     surrounding messages. */
+  .hover-strip {
+    position: absolute;
+    right: 8px;
+    top: -12px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 4px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-pill, 999px);
+    box-shadow: var(--card-shadow);
+    z-index: 2;
+  }
+  .rx-quick {
+    background: transparent;
+    border: none;
+    border-radius: 999px;
+    padding: 2px 6px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    color: inherit;
+  }
+  .rx-quick:hover:not(:disabled) {
+    background: var(--surface-hover, var(--surface-2));
+  }
+  .rx-quick.on {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  .rx-quick.more { font-size: 12px; opacity: .7; }
+  .rx-quick:disabled { opacity: .5; cursor: default; }
+  /* Row of reactions actually attached to the message, rendered inside the
+     bubble under the content. Tap to remove. */
+  .reactions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: .3rem;
+  }
+  .rx-chip {
+    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 12%, transparent);
+    color: inherit;
+    border: 1px solid color-mix(in srgb, var(--bubble-mine-on, currentColor) 18%, transparent);
+    border-radius: 999px;
+    padding: 1px 7px;
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+  }
+  .rx-chip:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 22%, transparent);
+  }
+  .rx-chip:disabled { opacity: .5; cursor: default; }
+  /* Popover picker opened from the ⋯ button or the "React…" ctx menu entry.
+     Positioned near the bubble via CSS anchor to the row-wrap wrapper. */
+  .rx-picker {
+    position: absolute;
+    right: 0;
+    bottom: 100%;
+    margin-bottom: 4px;
+    z-index: 42;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 240px;
+  }
+  .rx-picker-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .rx-picker-grid {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 2px;
+    border-top: 1px solid var(--border);
+    padding-top: 6px;
   }
   .bubble {
     background: var(--bubble-mine);
@@ -327,11 +693,30 @@
     margin-top: .25rem;
     gap: .35rem;
   }
-  .voice .icon { font-size: 1.05rem; }
+  .voice .icon { display: inline-flex; align-items: center; line-height: 0; }
   .voice audio {
     width: 100%;
     max-width: 320px;
     height: 32px;
+  }
+  .transcript {
+    margin-top: .3rem;
+    font-style: italic;
+    opacity: .8;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    max-width: 320px;
+  }
+  .transcript-loading {
+    margin-top: .3rem;
+    font-style: italic;
+    opacity: .55;
+  }
+  .transcript-error {
+    margin-top: .3rem;
+    color: var(--danger, #b00);
+    white-space: pre-wrap;
+    max-width: 320px;
   }
   .image {
     display: block;
@@ -380,6 +765,22 @@
     opacity: .5;
     cursor: default;
   }
+  .reminder-editor {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    margin-top: .35rem;
+    flex-wrap: wrap;
+  }
+  .reminder-input {
+    padding: .25rem .4rem;
+    border-radius: 8px;
+    border: 1px solid var(--outline-variant);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: .8rem;
+  }
   .checklist {
     list-style: none;
     padding: 0;
@@ -397,28 +798,67 @@
   }
   .tags { margin-top: .35rem; flex-wrap: wrap; }
   .image-placeholder { font-style: italic; }
-  .action {
-    background: transparent;
-    border: none;
-    color: inherit;
-    opacity: .55;
-    cursor: pointer;
-    padding: 0 .15rem;
-    font: inherit;
+  .indicator {
+    display: inline-flex;
+    align-items: center;
     line-height: 1;
+    padding: 0 .1rem;
   }
-  .action:hover:not(:disabled) {
-    opacity: 1;
-  }
-  .action:disabled {
-    cursor: default;
-    opacity: .3;
-  }
-  .action.starred {
+  .indicator.starred {
     color: var(--accent, gold);
     opacity: 1;
   }
-  .action.danger:hover:not(:disabled) {
-    color: var(--error, #b00);
+  /* Right-click context menu. Same pattern as ChatList: backdrop is a <button>
+     for a11y and must not pick up the global accent-pill hover styling. */
+  .ctx-backdrop,
+  .ctx-backdrop:hover {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transition: none;
+    cursor: default;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 170px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--card-shadow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: .25rem;
+  }
+  .ctx-menu button {
+    background: transparent;
+    border: none;
+    color: inherit;
+    padding: .45rem .6rem;
+    text-align: left;
+    font: inherit;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .ctx-menu button:hover:not(:disabled) {
+    background: var(--surface-hover, var(--surface-2));
+  }
+  .ctx-menu button:disabled {
+    opacity: .5;
+    cursor: default;
+  }
+  .ctx-menu button.danger { color: var(--danger, var(--error, #b00)); }
+  .ctx-sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: .25rem 0;
   }
 </style>

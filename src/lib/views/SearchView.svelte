@@ -5,6 +5,7 @@
   import RichText from "../components/RichText.svelte";
   import Avatar from "../components/Avatar.svelte";
   import { formatFullTime } from "../format";
+  import { Search, Mic, Image as ImageIcon } from "@lucide/svelte";
 
   type Hit = { chat: ChatSummary; message: Message };
 
@@ -33,12 +34,19 @@
 
   // Flatten a message to plain text so a substring query can hit any content type.
   function messageText(m: Message): string {
+    // Voice-message transcripts land in `m.transcript`; adding it to the corpus
+    // makes voice messages searchable by their spoken content once whisper has
+    // run over them.
+    const transcript = m.transcript ?? "";
     if (m.type === "CHECKLIST") {
-      return m.checklistItems.map((i) => i.text).join(" ");
+      return [m.checklistItems.map((i) => i.text).join(" "), transcript]
+        .filter(Boolean)
+        .join(" ");
     }
-    return m.content
+    const textFromBlocks = m.content
       .map((b) => b.spans.map((s) => s.text).join(""))
       .join(" ");
+    return [textFromBlocks, transcript].filter(Boolean).join(" ");
   }
 
   const hits = $derived.by<Hit[]>(() => {
@@ -56,9 +64,10 @@
   }
 </script>
 
-<div class="page scroll">
+<div class="page-scroll scroll">
+ <div class="page">
   <header>
-    <h1>🔎 Search</h1>
+    <h1><Search size={22} strokeWidth={2.25} /> Search</h1>
     <p class="muted">Find any message across every chat.</p>
   </header>
 
@@ -91,7 +100,7 @@
             {#if h.message.type === "TEXT"}
               <RichText blocks={h.message.content} />
             {:else if h.message.type === "VOICE"}
-              <span>🎙️ Voice message</span>
+              <span class="media-chip"><Mic size={13} strokeWidth={2.25} /> Voice message</span>
             {:else if h.message.type === "CHECKLIST"}
               <ul class="checklist">
                 {#each h.message.checklistItems as item (item.id)}
@@ -102,19 +111,23 @@
                 {/each}
               </ul>
             {:else}
-              <span>🖼️ Image</span>
+              <span class="media-chip"><ImageIcon size={13} strokeWidth={2.25} /> Image</span>
             {/if}
           </div>
         </li>
       {/each}
     </ul>
   {/if}
+ </div>
 </div>
 
 <style>
+  .page-scroll {
+    height: 100%;
+    width: 100%;
+  }
   .page {
     padding: 1.5rem;
-    height: 100%;
     max-width: 820px;
     margin: 0 auto;
     display: flex;
@@ -150,4 +163,6 @@
   .content { padding-left: .5rem; }
   .center { text-align: center; padding: 2rem; }
   .checklist { list-style: none; margin: 0; padding: 0; }
+  h1 { display: inline-flex; align-items: center; gap: .5rem; line-height: 1; }
+  .media-chip { display: inline-flex; align-items: center; gap: .3rem; line-height: 1; }
 </style>

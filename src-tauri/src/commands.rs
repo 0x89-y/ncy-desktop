@@ -703,6 +703,8 @@ pub async fn author_send_text(
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
     };
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
@@ -716,6 +718,48 @@ pub async fn author_toggle_star(
     let key = state.keystore.key_for(&chat_id);
     let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
     msg.is_starred = !msg.is_starred;
+    msg.edited_at = Some(now_ms());
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
+}
+
+/// Toggle a single emoji reaction on a message. Adds if absent, removes if
+/// present. Key-aware so it works in an unlocked protected chat (reads the
+/// decrypted message, re-seals the reaction change alongside the body).
+#[tauri::command]
+pub async fn author_toggle_reaction(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    emoji: String,
+) -> Result<(), String> {
+    let trimmed = emoji.trim().to_string();
+    if trimmed.is_empty() {
+        return Err("emoji is empty".into());
+    }
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+    if let Some(pos) = msg.reactions.iter().position(|e| e == &trimmed) {
+        msg.reactions.remove(pos);
+    } else {
+        msg.reactions.push(trimmed);
+    }
+    msg.edited_at = Some(now_ms());
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
+}
+
+/// Set or clear a message's reminder time. `reminder_at` is Unix ms; `None`
+/// clears it. Key-aware so it works in an unlocked protected chat (reads the
+/// decrypted message, re-seals on author).
+#[tauri::command]
+pub async fn author_set_reminder(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    reminder_at: Option<i64>,
+) -> Result<(), String> {
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+    msg.reminder_at = reminder_at;
     msg.edited_at = Some(now_ms());
     author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
@@ -818,6 +862,8 @@ pub async fn author_send_checklist(
         tags: vec![],
         reminder_at: None,
         checklist_items: cleaned,
+        reactions: vec![],
+        transcript: None,
     };
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
@@ -927,6 +973,122 @@ pub async fn author_update_chat_meta(
     Ok(())
 }
 
+/// Set (or replace) a chat's avatar from a local file. Hashes the bytes,
+/// persists the blob content-addressed, then authors a `ChatMetadataChanged`
+/// pointing at `avatar/<hash>.jpg` — same on-the-wire shape the phone uses in
+/// its `setChatAvatar`, so paired peers pick it up via the existing blob
+/// transfer path.
+#[tauri::command]
+pub async fn author_set_chat_avatar(
+    state: State<'_, AppState>,
+    chat_id: String,
+    source_path: String,
+) -> Result<(), String> {
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    let bytes = std::fs::read(&source_path).map_err(|e| format!("read source: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty image file".into());
+    }
+    let hash = crate::sync::blob::sha256_hex(&bytes);
+    state
+        .blobs
+        .write_verified(&hash, "image", &bytes)
+        .map_err(|e| format!("persist blob: {e}"))?;
+    meta.avatar_file = Some(format!("avatar/{}.jpg", hash));
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Same as [`author_set_chat_avatar`] but for the chat background image.
+#[tauri::command]
+pub async fn author_set_chat_background(
+    state: State<'_, AppState>,
+    chat_id: String,
+    source_path: String,
+) -> Result<(), String> {
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    let bytes = std::fs::read(&source_path).map_err(|e| format!("read source: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty image file".into());
+    }
+    let hash = crate::sync::blob::sha256_hex(&bytes);
+    state
+        .blobs
+        .write_verified(&hash, "image", &bytes)
+        .map_err(|e| format!("persist blob: {e}"))?;
+    meta.background_file = Some(format!("background/{}.jpg", hash));
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Clear the chat's avatar (sets `avatar_file: null`).
+#[tauri::command]
+pub async fn author_clear_chat_avatar(
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<(), String> {
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    meta.avatar_file = None;
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Clear the chat's background image (sets `background_file: null`).
+#[tauri::command]
+pub async fn author_clear_chat_background(
+    state: State<'_, AppState>,
+    chat_id: String,
+) -> Result<(), String> {
+    let mut meta = current_metadata(&state.events, &chat_id)?;
+    meta.background_file = None;
+    let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
+    author_event(
+        &state.clock,
+        &state.events,
+        &state.outbound,
+        &state.bus,
+        &state.identity_device_id,
+        &chat_id,
+        op_type::CHAT_METADATA_CHANGED,
+        payload,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Delete a chat from the desktop. Emits a `ChatTombstoned` (delete-wins, syncs to
 /// the phone) then collapses this chat's local log to just that tombstone — same
 /// shape as the phone's `deleteChat`, so there's nothing left to read on disk but
@@ -1013,8 +1175,59 @@ pub async fn author_send_message(
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
     };
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
+}
+
+/// Author a voice message. The frontend records via `MediaRecorder`, base64s the
+/// bytes and calls this. The blob is stored content-addressed (mediaType=voice);
+/// the reference format matches the phone's `voice/<hash>.m4a`. Duration is what
+/// the recorder measured (ms) so peers show a length even before they download.
+#[tauri::command]
+pub async fn author_send_voice(
+    state: State<'_, AppState>,
+    chat_id: String,
+    bytes_b64: String,
+    duration_ms: Option<i64>,
+) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    let bytes = B64
+        .decode(bytes_b64.as_bytes())
+        .map_err(|e| format!("bad base64: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty voice payload".into());
+    }
+    let hash = crate::sync::blob::sha256_hex(&bytes);
+    state
+        .blobs
+        .write_verified(&hash, "voice", &bytes)
+        .map_err(|e| format!("persist blob: {e}"))?;
+
+    let reference = format!("voice/{}.m4a", hash);
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content: vec![],
+        voice_file: Some(reference),
+        voice_duration_ms: duration_ms,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::Voice,
+        is_starred: false,
+        image_files: vec![],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
+    };
+    let id = msg.id.clone();
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)?;
+    // Return the id so the frontend can kick off `author_transcribe_voice`
+    // in the background when auto-transcription is enabled.
+    Ok(id)
 }
 
 /// Attach an image from a local file path. Reads the bytes, hashes them, persists
@@ -1066,6 +1279,8 @@ pub async fn author_send_image(
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
     };
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
@@ -1229,6 +1444,162 @@ pub async fn import_backup(
         events: events_added,
         blobs: blobs_added,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Voice transcription (whisper.cpp via subprocess). See `storage/whisper.rs`
+// for the engine details.
+// ---------------------------------------------------------------------------
+
+fn whisper_paths(state: &AppState) -> crate::storage::whisper::WhisperPaths {
+    crate::storage::whisper::WhisperPaths::from_data_root(&state.paths.root)
+}
+
+fn extract_voice_hash(reference: &str) -> Option<String> {
+    // Reference format is `voice/<64-hex>.m4a` — same shape phone-authored
+    // messages carry, mirrored by desktop's own `author_send_voice`.
+    let stem = reference
+        .strip_prefix("voice/")
+        .and_then(|s| s.strip_suffix(".m4a"))?;
+    if stem.len() == 64 && stem.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(stem.to_string())
+    } else {
+        None
+    }
+}
+
+/// Local install probe — the Settings UI polls this to render the CLI /
+/// model status card.
+#[tauri::command]
+pub async fn transcription_status(
+    state: State<'_, AppState>,
+) -> Result<crate::storage::whisper::WhisperStatus, String> {
+    let paths = whisper_paths(state.inner());
+    Ok(crate::storage::whisper::WhisperStatus::probe(&paths))
+}
+
+/// Streaming download of `ggml-tiny.bin` into the app's whisper dir. Emits
+/// `transcription-event` payloads on the tauri event bus so the Settings UI
+/// can render a progress bar. Blocks until finished (or errored).
+#[tauri::command]
+pub async fn transcription_download_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let paths = whisper_paths(state.inner());
+    let app_for_progress = app.clone();
+    let result = crate::storage::whisper::download_model(&paths, move |written, total| {
+        let _ = app_for_progress.emit(
+            "transcription-event",
+            serde_json::json!({
+                "kind": "download-progress",
+                "written": written,
+                "total": total,
+            }),
+        );
+    })
+    .await;
+    match result {
+        Ok(()) => {
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-complete" }),
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-error", "message": msg.clone() }),
+            );
+            Err(msg)
+        }
+    }
+}
+
+/// Open the whisper install folder in the OS file explorer so the user can
+/// drop `whisper-cli.exe` in place manually (release-URL scraping is brittle,
+/// so v1 keeps the CLI a manual-install step).
+#[tauri::command]
+pub async fn transcription_open_folder(state: State<'_, AppState>) -> Result<(), String> {
+    let paths = whisper_paths(state.inner());
+    paths.ensure_dir().map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&paths.dir)
+            .spawn()
+            .map_err(|e| format!("open folder: {e}"))?;
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" })
+            .arg(&paths.dir)
+            .spawn()
+            .map_err(|e| format!("open folder: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Delete the model file. UI calls this from the "Delete model" button in
+/// Settings to reclaim ~74 MB.
+#[tauri::command]
+pub async fn transcription_delete_model(state: State<'_, AppState>) -> Result<(), String> {
+    let paths = whisper_paths(state.inner());
+    if paths.model.is_file() {
+        std::fs::remove_file(&paths.model).map_err(|e| format!("delete model: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Transcribe a voice message, patching the message's `transcript` field via a
+/// `MessageEdited` event that syncs to every paired peer. Key-aware (handles
+/// unlocked protected chats). Blocks until whisper-cli finishes — the frontend
+/// awaits this and shows a "Transcribing…" indicator meanwhile.
+#[tauri::command]
+pub async fn author_transcribe_voice(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+) -> Result<(), String> {
+    let key = state.keystore.key_for(&chat_id);
+    let msg_ref = {
+        let msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+        if !matches!(msg.message_type, MessageType::Voice) {
+            return Err("not a voice message".into());
+        }
+        msg.voice_file
+            .clone()
+            .ok_or_else(|| "voice message has no blob reference".to_string())?
+    };
+    let hash = extract_voice_hash(&msg_ref)
+        .ok_or_else(|| format!("cannot parse voice reference {msg_ref}"))?;
+    if !state.blobs.exists(&hash, "voice") {
+        return Err("voice blob not yet on this device — wait for it to sync".into());
+    }
+    let bytes = state
+        .blobs
+        .read(&hash, "voice")
+        .map_err(|e| format!("read blob: {e}"))?;
+
+    let paths = whisper_paths(state.inner());
+    // Whisper is blocking (subprocess) — move it off the async runtime so we
+    // don't stall the tauri worker while it grinds.
+    let transcript = tokio::task::spawn_blocking(move || {
+        crate::storage::whisper::transcribe_bytes(&paths, bytes)
+    })
+    .await
+    .map_err(|e| format!("transcription join: {e}"))?
+    .map_err(|e| format!("transcription: {e}"))?;
+
+    // Re-read the message (it may have changed while whisper was running) and
+    // patch just the transcript + edited_at, mirroring how star / reminder /
+    // reactions all re-emit `MessageEdited`.
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+    msg.transcript = Some(transcript);
+    msg.edited_at = Some(now_ms());
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
 
 /// Forward sync server events into a Tauri event channel so the frontend can react

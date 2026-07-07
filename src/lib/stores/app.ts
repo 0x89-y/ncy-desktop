@@ -24,9 +24,56 @@ export const lastSyncEvent = writable<SyncEventPayload | null>(null);
  * Lets blob-rendering components reactively re-fetch when the bytes land. */
 export const arrivedBlobs = writable<Set<string>>(new Set());
 
+/** In-flight voice-message transcriptions, keyed by messageId. MessageBubble
+ *  reads this to show a "Transcribing…" indicator while the whisper subprocess
+ *  runs; the trigger sites (auto after `authorSendVoice`, manual from the ctx
+ *  menu) add/remove entries around their `authorTranscribeVoice` call. */
+export const transcribing = writable<Set<string>>(new Set());
+/** Last transcription error per message, keyed by messageId. MessageBubble
+ *  renders it inline under the voice bubble so failures are visible without
+ *  needing devtools open. Cleared on the next attempt. */
+export const transcriptionErrors = writable<Record<string, string>>({});
+
+export function markTranscribing(messageId: string) {
+  transcribing.update((s) => {
+    const next = new Set(s);
+    next.add(messageId);
+    return next;
+  });
+  transcriptionErrors.update((m) => {
+    if (!(messageId in m)) return m;
+    const next = { ...m };
+    delete next[messageId];
+    return next;
+  });
+}
+export function unmarkTranscribing(messageId: string) {
+  transcribing.update((s) => {
+    if (!s.has(messageId)) return s;
+    const next = new Set(s);
+    next.delete(messageId);
+    return next;
+  });
+}
+export function setTranscriptionError(messageId: string, message: string) {
+  transcriptionErrors.update((m) => ({ ...m, [messageId]: message }));
+}
+
 export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
 export const activeView = writable<"chats" | "search" | "starred" | "reminders" | "pairing" | "settings">("chats");
+
+/** Sidebar collapsed state — icon-only rail when true. Persisted per-device
+ *  in `localStorage` so it survives restarts. */
+const SIDEBAR_KEY = "ncy:sidebar-collapsed";
+const initialCollapsed =
+  typeof localStorage !== "undefined" && localStorage.getItem(SIDEBAR_KEY) === "1";
+export const sidebarCollapsed = writable<boolean>(initialCollapsed);
+sidebarCollapsed.subscribe((v) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(SIDEBAR_KEY, v ? "1" : "0");
+  }
+});
 export const activeTag = writable<string | null>(null);
 /** Profile sync: which phone profile the chat list is scoped to.
  *  `null` = all profiles, `""` = the legacy/pre-profile-sync "Default" bucket,

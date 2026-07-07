@@ -5,6 +5,7 @@
   import RichText from "../components/RichText.svelte";
   import Avatar from "../components/Avatar.svelte";
   import { formatFullTime } from "../format";
+  import { Star, Mic, Image as ImageIcon } from "@lucide/svelte";
 
   type Hit = { chat: ChatSummary; message: Message };
   let hits = $state<Hit[]>([]);
@@ -33,9 +34,10 @@
   }
 </script>
 
-<div class="page scroll">
+<div class="page-scroll scroll">
+ <div class="page">
   <header>
-    <h1>⭐ Starred messages</h1>
+    <h1><Star size={22} strokeWidth={2.25} /> Starred messages</h1>
     <p class="muted">All starred messages across every chat.</p>
   </header>
 
@@ -56,7 +58,7 @@
             {#if h.message.type === "TEXT"}
               <RichText blocks={h.message.content} />
             {:else if h.message.type === "VOICE"}
-              <span>🎙️ Voice message</span>
+              <span class="media-chip"><Mic size={13} strokeWidth={2.25} /> Voice message</span>
             {:else if h.message.type === "CHECKLIST"}
               <ul class="checklist">
                 {#each h.message.checklistItems as item (item.id)}
@@ -67,19 +69,23 @@
                 {/each}
               </ul>
             {:else}
-              <span>🖼️ Image</span>
+              <span class="media-chip"><ImageIcon size={13} strokeWidth={2.25} /> Image</span>
             {/if}
           </div>
         </li>
       {/each}
     </ul>
   {/if}
+ </div>
 </div>
 
 <style>
+  .page-scroll {
+    height: 100%;
+    width: 100%;
+  }
   .page {
     padding: 1.5rem;
-    height: 100%;
     max-width: 820px;
     margin: 0 auto;
     display: flex;
@@ -103,4 +109,6 @@
   .content { padding-left: .5rem; }
   .center { text-align: center; padding: 2rem; }
   .checklist { list-style: none; margin: 0; padding: 0; }
+  h1 { display: inline-flex; align-items: center; gap: .5rem; line-height: 1; }
+  .media-chip { display: inline-flex; align-items: center; gap: .3rem; line-height: 1; }
 </style>

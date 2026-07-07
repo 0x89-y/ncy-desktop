@@ -55,4 +55,15 @@ pub struct Message {
     pub reminder_at: Option<i64>,
     #[serde(default, rename = "checklistItems")]
     pub checklist_items: Vec<ChecklistItem>,
+    /// Emoji reactions attached to this message (ordered, no duplicates,
+    /// toggle-on-repeat). Rides inside the sealed body for protected chats
+    /// via the same [`MessageEdited`] path as star/reminder.
+    #[serde(default)]
+    pub reactions: Vec<String>,
+    /// Whisper.cpp transcript for voice messages (`None` for other types or
+    /// when transcription hasn't run yet). Symmetric sync: any device that
+    /// transcribes republishes a `MessageEdited`; peers pick it up without
+    /// re-transcribing. Sealed with the body in protected chats.
+    #[serde(default)]
+    pub transcript: Option<String>,
 }

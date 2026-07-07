@@ -22,6 +22,13 @@ pub struct AppSettings {
     /// files without this field still load.
     #[serde(default = "default_accent")]
     pub accent: String,
+    /// When true, voice messages authored on this device are automatically
+    /// transcribed via a local whisper.cpp binary + ggml model (see
+    /// `storage/whisper.rs`). The result rides back to peers via `MessageEdited`.
+    /// Opt-in because both the model download and per-message CPU cost aren't
+    /// things we want to spring on a first-run user.
+    #[serde(default, rename = "transcriptionEnabled")]
+    pub transcription_enabled: bool,
 }
 
 fn default_theme() -> String {
@@ -43,6 +50,7 @@ impl Default for AppSettings {
             theme: default_theme(),
             discoverable: false,
             accent: default_accent(),
+            transcription_enabled: false,
         }
     }
 }

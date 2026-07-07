@@ -166,7 +166,7 @@ fn locked_placeholder(ev: &ChatEventWire) -> Message {
         content: vec![RichTextBlock {
             block_type: BlockType::Paragraph,
             spans: vec![RichTextSpan {
-                text: "🔒 Protected message".to_string(),
+                text: "Protected message".to_string(),
                 bold: false,
                 italic: false,
                 underline: false,
@@ -186,6 +186,8 @@ fn locked_placeholder(ev: &ChatEventWire) -> Message {
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
     }
 }
 
@@ -202,8 +204,16 @@ fn plain_text_preview(m: &Message) -> String {
                 .unwrap_or("");
             format!("{done}/{total} {first}")
         }
-        MessageType::Voice => "🎙️ Voice message".to_string(),
-        MessageType::Image => "🖼️ Image".to_string(),
+        // Fall back to the whisper transcript when we have one; keeps the
+        // chat-list preview meaningful instead of a bare "Voice message" once
+        // transcription has run.
+        MessageType::Voice => m
+            .transcript
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or("Voice message")
+            .to_string(),
+        MessageType::Image => "Image".to_string(),
         MessageType::Text => m
             .content
             .iter()

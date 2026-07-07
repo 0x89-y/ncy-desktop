@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type MediaType } from "../ipc";
+  import { Image as ImageIcon, ImageOff } from "@lucide/svelte";
 
   let {
     hash,
@@ -47,19 +48,27 @@
 {#if dataUrl}
   <img src={dataUrl} {alt} class={klass} />
 {:else if pending}
-  <span class="blob-placeholder muted tiny">🖼 loading…</span>
+  <span class="blob-placeholder muted tiny">
+    <ImageIcon size={12} strokeWidth={2.25} />
+    <span>loading…</span>
+  </span>
 {:else if failed}
-  <span class="blob-placeholder muted tiny">🖼 not synced yet</span>
+  <span class="blob-placeholder muted tiny">
+    <ImageOff size={12} strokeWidth={2.25} />
+    <span>not synced yet</span>
+  </span>
 {/if}
 
 <style>
   .blob-placeholder {
     display: inline-flex;
     align-items: center;
+    gap: .3rem;
     padding: 0.15rem 0.4rem;
     border-radius: 6px;
     background: var(--surface-2);
     font-style: italic;
+    line-height: 1;
   }
   img {
     max-width: 100%;

@@ -1,9 +1,22 @@
 <script lang="ts">
-  import { activeChat, refreshActiveChat, refreshChats, selectChat } from "../stores/app";
+  import {
+    activeChat,
+    refreshActiveChat,
+    refreshChats,
+    selectChat,
+    settings,
+    markTranscribing,
+    unmarkTranscribing,
+    setTranscriptionError,
+  } from "../stores/app";
   import { api, extractMediaHash } from "../ipc";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
+  import {
+    Plus, ListChecks, Pin, Lock, Unlock,
+    MoreHorizontal, MessageSquare, Mic, Square,
+  } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
 
@@ -432,6 +445,180 @@
     }
   }
 
+  // ----- Chat avatar + background (set / clear) -----
+  async function pickImageFile(): Promise<string | null> {
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] },
+        ],
+      });
+      return Array.isArray(picked) ? picked[0] ?? null : picked;
+    } catch {
+      return null;
+    }
+  }
+  async function setAvatar() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    const path = await pickImageFile();
+    if (!path) return;
+    try {
+      await api.authorSetChatAvatar(c.metadata.id, path);
+      await refreshActiveChat();
+      await refreshChats();
+    } catch (e) {
+      console.error("set avatar failed", e);
+    }
+  }
+  async function clearAvatar() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    try {
+      await api.authorClearChatAvatar(c.metadata.id);
+      await refreshActiveChat();
+      await refreshChats();
+    } catch (e) {
+      console.error("clear avatar failed", e);
+    }
+  }
+  async function setBackground() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    const path = await pickImageFile();
+    if (!path) return;
+    try {
+      await api.authorSetChatBackground(c.metadata.id, path);
+      await refreshActiveChat();
+      await refreshChats();
+    } catch (e) {
+      console.error("set background failed", e);
+    }
+  }
+  async function clearBackground() {
+    const c = $activeChat;
+    if (!c) return;
+    menuOpen = false;
+    try {
+      await api.authorClearChatBackground(c.metadata.id);
+      await refreshActiveChat();
+      await refreshChats();
+    } catch (e) {
+      console.error("clear background failed", e);
+    }
+  }
+
+  // ----- Voice recording (mic → MediaRecorder → blob) -----
+  let recording = $state(false);
+  let recordStart = $state(0);
+  let recordElapsed = $state(0);
+  let mediaRecorder: MediaRecorder | null = null;
+  let recordedChunks: Blob[] = [];
+  let recordStream: MediaStream | null = null;
+  let recordTimer: ReturnType<typeof setInterval> | null = null;
+
+  async function startRecording() {
+    const c = $activeChat;
+    if (!c || sending || recording) return;
+    sendError = null;
+    try {
+      recordStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e: any) {
+      sendError = "microphone permission denied";
+      return;
+    }
+    recordedChunks = [];
+    // Prefer AAC-in-MP4 so the blob is a real .m4a that any phone (and
+    // symphonia, in the transcription pipeline) can decode without ffmpeg.
+    // Recent Edge / WebView2 on Windows supports this via Media Foundation.
+    // Falls back to webm/opus on older browsers — those blobs still play back
+    // via the browser's lenient content sniffing but need ffmpeg to transcribe.
+    const candidates = [
+      "audio/mp4;codecs=mp4a.40.2",
+      "audio/mp4",
+      "audio/webm;codecs=opus",
+      "audio/webm",
+    ];
+    const mimeType =
+      candidates.find((m) => MediaRecorder.isTypeSupported(m)) ?? "";
+    console.log("voice recording mimeType:", mimeType || "(browser default)");
+    mediaRecorder = new MediaRecorder(recordStream, mimeType ? { mimeType } : undefined);
+    mediaRecorder.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data);
+    };
+    mediaRecorder.onstop = async () => {
+      // Tear down the mic stream regardless of what happens next.
+      recordStream?.getTracks().forEach((t) => t.stop());
+      recordStream = null;
+      const duration = Date.now() - recordStart;
+      const blob = new Blob(recordedChunks, {
+        type: mediaRecorder?.mimeType ?? mimeType ?? "audio/mp4",
+      });
+      recordedChunks = [];
+      mediaRecorder = null;
+      if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
+      recording = false;
+      if (blob.size === 0) return;
+      sending = true;
+      try {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        // btoa can't take a Uint8Array; assemble a binary string and encode.
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        const b64 = btoa(bin);
+        const messageId = await api.authorSendVoice(c.metadata.id, b64, duration);
+        // Auto-transcribe: fire-and-forget so the send returns quickly while
+        // whisper grinds in the background. MessageBubble reads the
+        // `transcribing` store to show the spinner.
+        if ($settings?.transcriptionEnabled) {
+          console.log("auto-transcribe: starting for", messageId);
+          markTranscribing(messageId);
+          api
+            .authorTranscribeVoice(c.metadata.id, messageId)
+            .then(() => console.log("auto-transcribe: done for", messageId))
+            .catch((e: any) => {
+              const msg = typeof e === "string" ? e : (e?.message ?? String(e));
+              console.warn("auto-transcribe failed:", msg, e);
+              setTranscriptionError(messageId, msg);
+            })
+            .finally(() => unmarkTranscribing(messageId));
+        } else {
+          console.log("auto-transcribe: disabled in settings, skipping");
+        }
+      } catch (e: any) {
+        sendError = typeof e === "string" ? e : (e?.message ?? "voice send failed");
+      } finally {
+        sending = false;
+      }
+    };
+    recordStart = Date.now();
+    recordElapsed = 0;
+    recordTimer = setInterval(() => {
+      recordElapsed = Date.now() - recordStart;
+    }, 250);
+    mediaRecorder.start();
+    recording = true;
+  }
+  function stopRecording() {
+    if (!recording || !mediaRecorder) return;
+    mediaRecorder.stop(); // triggers onstop above
+  }
+  function cancelRecording() {
+    if (!recording || !mediaRecorder) return;
+    // Discard by clearing chunks before stopping.
+    recordedChunks = [];
+    mediaRecorder.stop();
+  }
+  function fmtElapsed(ms: number): string {
+    const s = Math.floor(ms / 1000);
+    return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
+  }
+
   async function attachImage() {
     const c = $activeChat;
     if (!c || sending) return;
@@ -473,8 +660,8 @@
       />
       <div class="col title-block">
         <div class="title">
-          {#if chat.metadata.isPinned}<span class="muted tiny">📌</span>{/if}
-          {#if chat.metadata.isProtected}<span class="muted tiny">🔒</span>{/if}
+          {#if chat.metadata.isPinned}<span class="title-ico"><Pin size={13} strokeWidth={2.25} /></span>{/if}
+          {#if chat.metadata.isProtected}<span class="title-ico"><Lock size={13} strokeWidth={2.25} /></span>{/if}
           {chat.metadata.name}
         </div>
         <div class="muted tiny">
@@ -485,8 +672,9 @@
         </div>
       </div>
       {#if chat.metadata.isProtected && chat.isUnlocked}
-        <button type="button" class="lock-btn" title="Lock this chat" onclick={lock}>
-          🔓 Lock
+        <button type="button" class="lock-btn" title="Lock this chat" aria-label="Lock this chat" onclick={lock}>
+          <Unlock size={14} strokeWidth={2.25} />
+          <span>Lock</span>
         </button>
       {/if}
       <div class="menu-wrap">
@@ -494,8 +682,9 @@
           type="button"
           class="menu-btn"
           title="Chat options"
+          aria-label="Chat options"
           onclick={() => { menuOpen = !menuOpen; }}
-        >⋯</button>
+        ><MoreHorizontal size={18} strokeWidth={2.25} /></button>
         {#if menuOpen}
           <div class="menu" role="menu">
             <button type="button" onclick={() => openEditor("rename")}>Rename…</button>
@@ -506,6 +695,18 @@
               {chat.metadata.isArchived ? "Unarchive" : "Archive"}
             </button>
             <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
+            <button type="button" onclick={setAvatar}>
+              {chat.metadata.avatarFile ? "Change avatar…" : "Set avatar…"}
+            </button>
+            {#if chat.metadata.avatarFile}
+              <button type="button" onclick={clearAvatar}>Remove avatar</button>
+            {/if}
+            <button type="button" onclick={setBackground}>
+              {chat.metadata.backgroundFile ? "Change background…" : "Set background…"}
+            </button>
+            {#if chat.metadata.backgroundFile}
+              <button type="button" onclick={clearBackground}>Remove background</button>
+            {/if}
             {#if chat.metadata.isProtected}
               <button type="button" onclick={() => openPin("change")}>Change PIN…</button>
             {:else}
@@ -580,7 +781,7 @@
     {#if chat.metadata.isProtected && !chat.isUnlocked}
       <div class="lock-screen">
         <div class="lock-card">
-          <div class="lock-icon">🔒</div>
+          <div class="lock-icon"><Lock size={40} strokeWidth={2} /></div>
           <h2>{chat.metadata.hideName ? "Protected chat" : chat.metadata.name}</h2>
           <p class="muted">
             Enter the chat PIN to decrypt and view its messages on this device.
@@ -631,7 +832,7 @@
       {#if checklistOpen}
         <div class="checklist-composer">
           <div class="row" style="justify-content:space-between;">
-            <strong class="tiny">📋 New checklist</strong>
+            <strong class="tiny">New checklist</strong>
             <button type="button" class="text-btn" onclick={() => { checklistOpen = false; checklistText = ""; }}>
               Cancel
             </button>
@@ -660,20 +861,44 @@
           type="button"
           class="attach"
           title="Attach image"
+          aria-label="Attach image"
           onclick={attachImage}
           disabled={sending}
         >
-          📎
+          <Plus size={18} strokeWidth={2.25} />
         </button>
         <button
           type="button"
           class="attach"
           title="New checklist"
+          aria-label="New checklist"
           onclick={() => { checklistOpen = !checklistOpen; }}
           disabled={sending}
         >
-          📋
+          <ListChecks size={18} strokeWidth={2.25} />
         </button>
+        <button
+          type="button"
+          class="attach"
+          class:recording
+          title={recording ? "Stop recording" : "Record voice message"}
+          aria-label={recording ? "Stop recording" : "Record voice message"}
+          onclick={recording ? stopRecording : startRecording}
+          disabled={sending && !recording}
+        >
+          {#if recording}
+            <Square size={16} strokeWidth={2.25} />
+          {:else}
+            <Mic size={18} strokeWidth={2.25} />
+          {/if}
+        </button>
+        {#if recording}
+          <span class="rec-indicator" title="Recording…">
+            <span class="rec-dot"></span>
+            <span class="tiny mono">{fmtElapsed(recordElapsed)}</span>
+            <button type="button" class="text-btn tiny" onclick={cancelRecording}>Cancel</button>
+          </span>
+        {/if}
         <textarea
           class="compose-input"
           placeholder="Type a message…"
@@ -699,7 +924,7 @@
 {:else}
   <div class="placeholder muted">
     <div>
-      <div style="font-size:3rem;line-height:1">💬</div>
+      <div style="line-height:0;color:var(--text-muted);opacity:.5"><MessageSquare size={56} strokeWidth={1.5} /></div>
       <p>Select a chat to view its messages.</p>
     </div>
   </div>
@@ -841,22 +1066,46 @@
     cursor: default;
   }
   .attach {
-    padding: .4rem .55rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: .4rem .5rem;
     border-radius: 12px;
     border: 1px solid var(--outline-variant);
     background: transparent;
-    color: inherit;
+    color: var(--text-muted);
     font: inherit;
-    font-size: 1.05rem;
     cursor: pointer;
-    line-height: 1;
+    line-height: 0;
   }
+  .attach:hover:not(:disabled) { color: var(--text); }
   .attach:hover:not(:disabled) {
     background: var(--surface-2, var(--surface));
   }
   .attach:disabled {
     opacity: .45;
     cursor: default;
+  }
+  .attach.recording {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .rec-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: 0 .35rem;
+  }
+  .rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    animation: rec-pulse 1s ease-in-out infinite;
+  }
+  @keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .3; }
   }
   /* See ChatList.svelte — must beat `button:hover` from app.css. */
   .ctx-backdrop,
@@ -952,7 +1201,20 @@
   }
   .lock-card h2 { margin: 0; font-size: 1.1rem; }
   .lock-card p { margin: 0; }
-  .lock-icon { font-size: 2.5rem; line-height: 1; }
+  .lock-icon {
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+    color: var(--text-muted);
+  }
+  .title-ico {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-muted);
+    margin-right: .25rem;
+    vertical-align: -1px;
+    line-height: 0;
+  }
   .pin-input {
     width: 100%;
     padding: .55rem .7rem;
@@ -969,6 +1231,9 @@
     outline-offset: 0;
   }
   .lock-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
     background: transparent;
     border: 1px solid var(--outline-variant);
     color: inherit;
@@ -977,18 +1242,21 @@
     padding: .35rem .7rem;
     border-radius: 999px;
     cursor: pointer;
+    line-height: 1;
     align-self: center;
   }
   .lock-btn:hover { background: var(--surface-2, var(--surface)); }
   .menu-wrap { position: relative; }
   .menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: 1px solid var(--outline-variant);
     color: inherit;
     font: inherit;
-    font-size: 1.1rem;
-    line-height: 1;
-    padding: .25rem .55rem;
+    line-height: 0;
+    padding: .3rem;
     border-radius: 999px;
     cursor: pointer;
   }

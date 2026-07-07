@@ -4,6 +4,7 @@
   import { chats, selectChat, activeView } from "../stores/app";
   import Avatar from "../components/Avatar.svelte";
   import { formatFullTime } from "../format";
+  import { AlarmClock } from "@lucide/svelte";
 
   type Hit = { chat: ChatSummary; message: Message };
   let upcoming = $state<Hit[]>([]);
@@ -43,8 +44,8 @@
       const done = m.checklistItems.filter((i) => i.checked).length;
       return `${done}/${m.checklistItems.length} ${m.checklistItems[0]?.text ?? ""}`;
     }
-    if (m.type === "VOICE") return "🎙️ Voice";
-    if (m.type === "IMAGE") return "🖼️ Image";
+    if (m.type === "VOICE") return "Voice message";
+    if (m.type === "IMAGE") return "Image";
     return m.content
       .flatMap((b) => b.spans.map((s) => s.text))
       .join("")
@@ -52,9 +53,10 @@
   }
 </script>
 
-<div class="page scroll">
+<div class="page-scroll scroll">
+ <div class="page">
   <header>
-    <h1>⏰ Reminders</h1>
+    <h1><AlarmClock size={22} strokeWidth={2.25} /> Reminders</h1>
     <p class="muted">Messages with a reminder set on the phone.</p>
   </header>
 
@@ -103,12 +105,16 @@
       </section>
     {/if}
   {/if}
+ </div>
 </div>
 
 <style>
+  .page-scroll {
+    height: 100%;
+    width: 100%;
+  }
   .page {
     padding: 1.5rem;
-    height: 100%;
     max-width: 820px;
     margin: 0 auto;
     display: flex;
@@ -136,4 +142,5 @@
     border: 1px solid var(--outline-variant);
   }
   .item:hover { background: var(--surface-2); filter: none; }
+  h1 { display: inline-flex; align-items: center; gap: .5rem; line-height: 1; }
 </style>

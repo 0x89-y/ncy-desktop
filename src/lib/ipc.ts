@@ -64,6 +64,10 @@ export type Message = {
   tags: string[];
   reminderAt: number | null;
   checklistItems: ChecklistItem[];
+  /** Emoji reactions attached to this message (ordered, no duplicates). */
+  reactions: string[];
+  /** Whisper transcript for voice messages (null until transcription runs). */
+  transcript: string | null;
 };
 
 export type ChatMetadata = {
@@ -130,7 +134,28 @@ export type AppSettings = {
   /** One of "purple" / "blue" / "green" / "pink" / "orange" / "teal" — drives
    *  the `[data-accent='…']` CSS preset applied to `document.documentElement`. */
   accent: string;
+  /** When true, voice messages are auto-transcribed via a local whisper.cpp
+   *  install. Off by default (opt-in — needs the model + CLI installed first). */
+  transcriptionEnabled: boolean;
 };
+
+export type WhisperStatus = {
+  cliPresent: boolean;
+  modelPresent: boolean;
+  modelSizeBytes: number | null;
+  /** Absolute path to the folder where the CLI + model live. Surfaced so the
+   *  Settings UI can print it verbatim and offer an "Open folder" button. */
+  dir: string;
+  /** Whether ffmpeg is available (bundled next to whisper-cli or on PATH).
+   *  Needed to decode webm/opus voice recorded on the desktop; phone-recorded
+   *  AAC/MP4 transcribes without it. */
+  ffmpegPresent: boolean;
+};
+
+export type TranscriptionEventPayload =
+  | { kind: "download-progress"; written: number; total: number }
+  | { kind: "download-complete" }
+  | { kind: "download-error"; message: string };
 
 export type DeviceIdentityView = {
   deviceId: string;
@@ -180,14 +205,30 @@ export const api = {
     invoke<void>("author_send_text", { chatId, text }),
   authorToggleStar: (chatId: string, messageId: string) =>
     invoke<void>("author_toggle_star", { chatId, messageId }),
+  authorToggleReaction: (chatId: string, messageId: string, emoji: string) =>
+    invoke<void>("author_toggle_reaction", { chatId, messageId, emoji }),
   authorEditText: (chatId: string, messageId: string, text: string) =>
     invoke<void>("author_edit_text", { chatId, messageId, text }),
   authorDeleteMessage: (chatId: string, messageId: string) =>
     invoke<void>("author_delete_message", { chatId, messageId }),
   authorSendImage: (chatId: string, sourcePath: string) =>
     invoke<void>("author_send_image", { chatId, sourcePath }),
+  authorSendVoice: (chatId: string, bytesB64: string, durationMs: number | null) =>
+    invoke<string>("author_send_voice", { chatId, bytesB64, durationMs }),
+  authorTranscribeVoice: (chatId: string, messageId: string) =>
+    invoke<void>("author_transcribe_voice", { chatId, messageId }),
   authorSendChecklist: (chatId: string, items: string[]) =>
     invoke<void>("author_send_checklist", { chatId, items }),
+  authorSetReminder: (chatId: string, messageId: string, reminderAt: number | null) =>
+    invoke<void>("author_set_reminder", { chatId, messageId, reminderAt }),
+  authorSetChatAvatar: (chatId: string, sourcePath: string) =>
+    invoke<void>("author_set_chat_avatar", { chatId, sourcePath }),
+  authorSetChatBackground: (chatId: string, sourcePath: string) =>
+    invoke<void>("author_set_chat_background", { chatId, sourcePath }),
+  authorClearChatAvatar: (chatId: string) =>
+    invoke<void>("author_clear_chat_avatar", { chatId }),
+  authorClearChatBackground: (chatId: string) =>
+    invoke<void>("author_clear_chat_background", { chatId }),
   authorToggleChecklistItem: (chatId: string, messageId: string, itemId: string) =>
     invoke<void>("author_toggle_checklist_item", { chatId, messageId, itemId }),
   authorUpdateChatMeta: (
@@ -229,6 +270,21 @@ export const api = {
     invoke<void>("protect_chat", { chatId, pin }),
   changeChatPin: (chatId: string, oldPin: string, newPin: string) =>
     invoke<void>("change_chat_pin", { chatId, oldPin, newPin }),
+
+  // Voice transcription (local whisper.cpp via subprocess).
+  transcriptionStatus: () => invoke<WhisperStatus>("transcription_status"),
+  transcriptionDownloadModel: () =>
+    invoke<void>("transcription_download_model"),
+  transcriptionDeleteModel: () =>
+    invoke<void>("transcription_delete_model"),
+  transcriptionOpenFolder: () =>
+    invoke<void>("transcription_open_folder"),
+  onTranscriptionEvent: (
+    cb: (ev: TranscriptionEventPayload) => void,
+  ): Promise<UnlistenFn> =>
+    listen<TranscriptionEventPayload>("transcription-event", (e) =>
+      cb(e.payload),
+    ),
 };
 
 /**
