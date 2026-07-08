@@ -51,7 +51,7 @@
   .avatar {
     width: var(--size);
     height: var(--size);
-    border-radius: 50%;
+    border-radius: calc(var(--size) * 0.28);
     display: inline-flex;
     align-items: center;
     justify-content: center;

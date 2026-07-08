@@ -1,10 +1,19 @@
 <script lang="ts">
   import { api, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
-  import { settings, refreshSettings, identity, refreshIdentity, refreshChats } from "../stores/app";
+  import { settings, refreshSettings, identity, refreshIdentity, refreshChats, settingsTab, activeView, type SettingsTab } from "../stores/app";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { Monitor, Sun, Moon, Mic } from "@lucide/svelte";
+  import { Monitor, Sun, Moon, Mic, ArrowLeft } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
+  import DevicesPane from "../components/DevicesPane.svelte";
+
+  const tabs: { id: SettingsTab; label: string }[] = [
+    { id: "general", label: "General" },
+    { id: "appearance", label: "Appearance" },
+    { id: "voice", label: "Transcription" },
+    { id: "devices", label: "Pairing" },
+    { id: "backup", label: "Backup" },
+  ];
 
   let port = $state(8765);
   let deviceName = $state("");
@@ -241,176 +250,182 @@
   }
 </script>
 
-<div class="page-scroll scroll">
+<div class="page-scroll scroll settings">
  <div class="page">
-  <h1>Settings</h1>
+  <div class="page-head">
+    <button class="back-btn" onclick={() => activeView.set("chats")} title="Back to chats" aria-label="Back to chats">
+      <ArrowLeft size={18} strokeWidth={2.5} />
+    </button>
+    <h1>Settings</h1>
+  </div>
 
-  <section class="card col">
+  <div class="settings-layout">
+   <nav class="side" aria-label="Settings sections">
+     {#each tabs as t (t.id)}
+       <button
+         type="button"
+         class="side-link"
+         class:active={$settingsTab === t.id}
+         onclick={() => settingsTab.set(t.id)}
+       >{t.label}</button>
+     {/each}
+   </nav>
+
+   <div class="panes">
+  {#if $settingsTab === "general"}
+  <section class="group">
     <h2>This device</h2>
-    {#if $identity}
-      <div class="row">
-        <span class="muted">Device ID</span>
-        <code class="id">{$identity.deviceId}</code>
-      </div>
-    {/if}
-    <label class="col field">
-      <span class="muted tiny">Display name (shown to the phone)</span>
-      <input
-        type="text"
-        bind:value={deviceName}
-        oninput={markDirty}
-      />
-    </label>
+    <div class="opt-list">
+      {#if $identity}
+        <div class="opt-row">
+          <span class="opt-label">Device ID</span>
+          <code class="id">{$identity.deviceId}</code>
+        </div>
+      {/if}
+      <label class="field">
+        <span class="field-label">Display name</span>
+        <input
+          type="text"
+          bind:value={deviceName}
+          oninput={markDirty}
+        />
+      </label>
+    </div>
   </section>
 
-  <section class="card col">
-    <h2>Sync server</h2>
-    <label class="col field">
-      <span class="muted tiny">Port</span>
-      <input
-        type="number"
-        min="1"
-        max="65535"
-        bind:value={port}
-        oninput={markDirty}
-      />
-      <span class="muted tiny">
-        Changes take effect after restart.
-      </span>
-    </label>
-
-    <label class="row toggle-field">
-      <input
-        type="checkbox"
-        bind:checked={discoverable}
-        onchange={markDirty}
-      />
-      <span class="col field">
-        <span>Discoverable on the network</span>
-        <span class="muted tiny">
-          When off, this desktop doesn't broadcast itself over mDNS, so it stays
-          invisible to other devices scanning the network. You can still pair by
-          scanning the QR code or pasting the pairing JSON — those carry the
-          address directly. Takes effect immediately.
+  <section class="group">
+    <h2>Network</h2>
+    <div class="opt-list">
+      <label class="field">
+        <span class="field-label">Port · restart to apply</span>
+        <input
+          type="number"
+          min="1"
+          max="65535"
+          bind:value={port}
+          oninput={markDirty}
+        />
+      </label>
+      <label class="opt-row">
+        <span class="opt-label">Discoverable</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            bind:checked={discoverable}
+            onchange={markDirty}
+          />
+          <span class="slider"></span>
         </span>
-      </span>
-    </label>
-  </section>
-
-  <section class="card col">
-    <h2>Appearance</h2>
-    <div class="col field">
-      <span class="muted tiny">Theme</span>
-      <div class="seg">
-        {#each themeModes as m (m.value)}
-          {@const Icon = m.icon}
-          <button
-            type="button"
-            class="seg-btn"
-            class:on={theme === m.value}
-            onclick={() => applyThemeNow(m.value)}
-          >
-            <Icon size={16} />
-            {m.label}
-          </button>
-        {/each}
-      </div>
+      </label>
     </div>
-    <div class="col field">
-      <span class="muted tiny">Accent</span>
-      <div class="accents">
-        {#each accents as a (a.name)}
-          <button
-            type="button"
-            class="swatch"
-            class:on={accent === a.name}
-            style={`--sw:${a.color};`}
-            title={a.label}
-            aria-label={a.label}
-            onclick={() => applyAccentNow(a.name)}
-          ></button>
-        {/each}
-      </div>
-    </div>
-  </section>
-
-  <section class="card col">
-    <h2><Mic size={16} strokeWidth={2.25} /> Voice transcription</h2>
-    <p class="muted tiny">
-      Runs whisper.cpp locally to transcribe voice messages. Transcripts sync to
-      paired devices via the same event log as message edits — nothing leaves
-      this machine. Auto-transcribes new voice messages when enabled; you can
-      also right-click a voice message and choose <strong>Transcribe</strong>.
+    <p class="hint">
+      Let nearby devices find this desktop to pair. QR / JSON pairing still
+      works when off.
     </p>
-    <label class="row toggle-field">
-      <input
-        type="checkbox"
-        checked={transcriptionEnabled}
-        onchange={(e) => applyTranscriptionToggle((e.currentTarget as HTMLInputElement).checked)}
-      />
-      <span class="col field">
-        <span>Auto-transcribe new voice messages</span>
-        <span class="muted tiny">
-          Uses whisper's tiny multilingual model (~74 MB). CPU-only; a short
-          voice note takes 1–3 seconds on a modern laptop.
-        </span>
-      </span>
-    </label>
+  </section>
 
-    <div class="col field">
-      <span class="muted tiny">Whisper install folder</span>
+  <div class="row actions">
+    <button onclick={save} disabled={!dirty || saving}>
+      {saving ? "Saving…" : "Save changes"}
+    </button>
+  </div>
+  {:else if $settingsTab === "appearance"}
+  <section class="group">
+    <h2>Appearance</h2>
+    <div class="opt-list">
+      <div class="opt-row">
+        <span class="opt-label">Theme</span>
+        <div class="seg">
+          {#each themeModes as m (m.value)}
+            {@const Icon = m.icon}
+            <button
+              type="button"
+              class="seg-btn"
+              class:on={theme === m.value}
+              onclick={() => applyThemeNow(m.value)}
+            >
+              <Icon size={16} />
+              {m.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+      <div class="opt-row">
+        <span class="opt-label">Accent</span>
+        <div class="accents">
+          {#each accents as a (a.name)}
+            <button
+              type="button"
+              class="swatch"
+              class:on={accent === a.name}
+              style={`--sw:${a.color};`}
+              title={a.label}
+              aria-label={a.label}
+              onclick={() => applyAccentNow(a.name)}
+            ></button>
+          {/each}
+        </div>
+      </div>
+    </div>
+  </section>
+  {:else if $settingsTab === "voice"}
+  <section class="group">
+    <h2><Mic size={16} strokeWidth={2.25} /> Voice transcription</h2>
+    <p class="hint">
+      Transcribes voice messages locally with whisper.cpp — nothing leaves this
+      machine. Right-click a voice message to transcribe it manually.
+    </p>
+    <div class="opt-list">
+      <label class="opt-row">
+        <span class="opt-label">Auto-transcribe voice messages</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={transcriptionEnabled}
+            onchange={(e) => applyTranscriptionToggle((e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+
+    <div class="field">
+      <span class="field-label">Whisper install folder</span>
       <div class="row" style="gap:.5rem; align-items:center;">
         <code class="id" style="word-break:break-all">{whisperStatus?.dir ?? "…"}</code>
         <button class="ghost" onclick={openWhisperFolder}>Open folder</button>
       </div>
     </div>
 
-    <div class="col field">
-      <span class="muted tiny">Whisper CLI (<code>{cliFileName}</code>)</span>
+    <div class="field">
+      <span class="field-label">Whisper CLI (<code>{cliFileName}</code>)</span>
       {#if whisperStatus?.cliPresent}
-        <span class="tiny" style="color:var(--success);">
-          ✓ Installed in the folder above.
-        </span>
+        <span class="tiny" style="color:var(--success);">✓ Installed</span>
       {:else}
         <span class="tiny" style="color:var(--warning);">
-          Not installed. Download the latest release from
-          <a href="https://github.com/ggml-org/whisper.cpp/releases" target="_blank" rel="noreferrer">whisper.cpp releases</a>
-          and extract <strong>the whole archive</strong> into the folder above
-          (<code>{cliFileName}</code> plus every sibling <code>{libExt}</code>
-          it links against — the CLI won't start without them).
-          {#if isMac || isLinux}
-            You may also need to <code>chmod +x {cliFileName}</code> after
-            extracting.
-          {/if}
+          Not installed. Extract a
+          <a href="https://github.com/ggml-org/whisper.cpp/releases" target="_blank" rel="noreferrer">whisper.cpp release</a>
+          into the folder above — <code>{cliFileName}</code> plus its sibling
+          <code>{libExt}</code> libraries.{#if isMac || isLinux} Then <code>chmod +x {cliFileName}</code>.{/if}
         </span>
       {/if}
     </div>
 
-    <div class="col field">
-      <span class="muted tiny">ffmpeg (optional — legacy webm/opus fallback)</span>
+    <div class="field">
+      <span class="field-label">ffmpeg (optional)</span>
       {#if whisperStatus?.ffmpegPresent}
         <span class="tiny" style="color:var(--success);">
-          ✓ Found (bundled next to whisper-cli or on PATH).
+          ✓ Found (next to whisper-cli or on PATH).
         </span>
       {:else}
         <span class="tiny muted">
-          Not found. New desktop recordings now use AAC-in-MP4 directly and
-          transcribe without ffmpeg. It's only needed to decode old webm/opus
-          voice messages recorded before this change, or on browsers that
-          don't support AAC MediaRecorder. If you hit an "unsupported codec"
-          error, install ffmpeg{#if isMac}
-            (<code>brew install ffmpeg</code>)
-          {:else if isLinux}
-            (via your package manager, e.g. <code>apt install ffmpeg</code>)
-          {:else}
-            (<a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" rel="noreferrer">Windows builds</a>)
-          {/if} and drop <code>{ffmpegFileName}</code> in the folder above or on PATH.
+          Not found. Only needed to decode old webm/opus voice notes — drop
+          <code>{ffmpegFileName}</code> in the folder above or on PATH.
         </span>
       {/if}
     </div>
 
-    <div class="col field">
-      <span class="muted tiny">Model (<code>ggml-tiny.bin</code>)</span>
+    <div class="field">
+      <span class="field-label">Model (<code>ggml-tiny.bin</code>)</span>
       {#if whisperStatus?.modelPresent}
         <div class="row" style="gap:.5rem; align-items:center;">
           <span class="tiny" style="color:var(--success);">
@@ -439,38 +454,40 @@
         </div>
       {/if}
     </div>
+    </div>
 
     {#if whisperError}
       <span class="tiny" style="color:var(--danger);">{whisperError}</span>
     {/if}
   </section>
-
-  <section class="card col">
+  {:else if $settingsTab === "devices"}
+  <DevicesPane />
+  {:else if $settingsTab === "backup"}
+  <section class="group">
     <h2>Backup</h2>
-    <p class="muted tiny">
-      A backup is a single <code>.zip</code> of every chat's event log plus its
-      media — your notes, portable and restorable. Importing <em>merges</em>
-      (it replays events; duplicates are ignored), so it's safe to import onto a
-      device that already has data. Your device identity, pairings and settings
-      are not included.
+    <p class="hint">
+      Export every chat and its media to a single <code>.zip</code>. Import
+      merges safely — duplicates are ignored. Identity, pairings and settings
+      aren't included.
     </p>
-    <div class="row" style="gap:.5rem; flex-wrap:wrap;">
-      <button onclick={doExport} disabled={backupBusy}>
-        {backupBusy ? "Working…" : "Export backup…"}
-      </button>
-      <button onclick={doImport} disabled={backupBusy}>
-        {backupBusy ? "Working…" : "Import backup…"}
-      </button>
+    <div class="opt-list">
+      <div class="field">
+        <div class="row" style="gap:.5rem; flex-wrap:wrap;">
+          <button onclick={doExport} disabled={backupBusy}>
+            {backupBusy ? "Working…" : "Export backup…"}
+          </button>
+          <button onclick={doImport} disabled={backupBusy}>
+            {backupBusy ? "Working…" : "Import backup…"}
+          </button>
+        </div>
+        {#if backupMsg}
+          <span class="muted tiny">{backupMsg}</span>
+        {/if}
+      </div>
     </div>
-    {#if backupMsg}
-      <span class="muted tiny">{backupMsg}</span>
-    {/if}
   </section>
-
-  <div class="row actions">
-    <button onclick={save} disabled={!dirty || saving}>
-      {saving ? "Saving…" : "Save changes"}
-    </button>
+  {/if}
+   </div>
   </div>
  </div>
 </div>
@@ -487,12 +504,29 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    max-width: 760px;
+    max-width: 880px;
     margin: 0 auto;
   }
   h1 { margin: 0; font-size: 1.4rem; }
-  h2 { margin: 0 0 .5rem; font-size: 1.05rem; font-weight: 600; }
-  .field { gap: .25rem; }
+  .page-head {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: .75rem;
+  }
+  /* Round accent back button — the primary way out of settings. Background /
+     hover color come from the global button default (accent + accent-hover). */
+  .back-btn {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: var(--radius);
+    line-height: 0;
+  }
   .id {
     font-family: "JetBrains Mono", ui-monospace, monospace;
     font-size: .8rem;
@@ -502,15 +536,78 @@
     user-select: all;
   }
   .actions { justify-content: flex-end; }
-  .toggle-field {
+
+  /* Sub-nav layout: sticky left rail of section links + a panes column.
+     Mirrors Acy's settings/+page.svelte. */
+  .settings-layout {
+    display: flex;
+    gap: 1.5rem;
     align-items: flex-start;
-    gap: .6rem;
-    margin-top: .85rem;
   }
-  .toggle-field input {
-    margin-top: .2rem;
+  .side {
+    position: sticky;
+    top: 0;
+    flex: 0 0 150px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .side-link {
+    text-align: left;
+    padding: .5rem .7rem;
+    border: none;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    font-size: .92rem;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .side-link:hover { background: var(--surface-hover); color: var(--text); filter: none; }
+  .side-link.active {
+    background: var(--surface-2);
+    color: var(--text);
+    border-left-color: var(--accent);
+  }
+  .panes {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* Sliding switch, sized to sit on the right of an `.opt-row`. */
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
     flex-shrink: 0;
   }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    background: var(--border-strong);
+    border-radius: var(--radius-pill);
+    transition: background .15s;
+  }
+  .slider::before {
+    content: "";
+    position: absolute;
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .15s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
   /* Segmented theme picker (System / Light / Dark) */
   .seg {
     display: inline-flex;
@@ -538,9 +635,8 @@
   }
   .seg-btn:hover { background: var(--surface-hover); color: var(--text); }
   .seg-btn.on {
-    background: var(--surface);
-    color: var(--text);
-    box-shadow: var(--card-shadow);
+    background: var(--accent);
+    color: var(--accent-contrast);
   }
   /* Accent swatch row */
   .accents {

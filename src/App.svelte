@@ -1,16 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { activeView, bootstrap, settings } from "./lib/stores/app";
-  import Sidebar from "./lib/components/Sidebar.svelte";
-  import ChatList from "./lib/components/ChatList.svelte";
+  import { activeView, bootstrap, settings, serverStatus, connectedPeers, pairings } from "./lib/stores/app";
+  import ChatListPane from "./lib/components/ChatListPane.svelte";
   import ChatView from "./lib/components/ChatView.svelte";
   import WindowControls from "./lib/components/WindowControls.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
-  import PairingView from "./lib/views/PairingView.svelte";
-  import SearchView from "./lib/views/SearchView.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
-  import StarredView from "./lib/views/StarredView.svelte";
-  import RemindersView from "./lib/views/RemindersView.svelte";
+  import { Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
 
@@ -49,31 +45,44 @@
 <header class="titlebar" data-tauri-drag-region>
   <span class="brand mono" data-tauri-drag-region>ncy</span>
   <div class="drag" data-tauri-drag-region></div>
+
+  <div
+    class="status-dot"
+    title={$connectedPeers.size > 0
+      ? `${$serverStatus} · ${$connectedPeers.size} phone${$connectedPeers.size === 1 ? "" : "s"} online`
+      : $serverStatus}
+  >
+    <span class="dot" class:running={$serverStatus === "running"} class:err={$serverStatus === "error"}></span>
+    {#if $connectedPeers.size > 0}<span class="tiny count">{$connectedPeers.size}</span>{/if}
+  </div>
+
+  <button
+    type="button"
+    class="tb-btn"
+    class:active={$activeView === "settings"}
+    title="Settings"
+    aria-label="Settings"
+    onclick={() => activeView.set("settings")}
+  >
+    <SettingsIcon size={16} strokeWidth={2.25} />
+    {#if $pairings.length > 0}<span class="badge">{$pairings.length}</span>{/if}
+  </button>
+
   <WindowControls />
 </header>
 
 <div class="shell">
-  <Sidebar />
-
   {#if !booted}
     <div class="boot muted">Loading…</div>
   {:else if $activeView === "chats"}
     <div class="chats-pane">
       <div class="chat-list-pane">
-        <ChatList />
+        <ChatListPane />
       </div>
       <div class="chat-view-pane">
         <ChatView />
       </div>
     </div>
-  {:else if $activeView === "search"}
-    <SearchView />
-  {:else if $activeView === "starred"}
-    <StarredView />
-  {:else if $activeView === "reminders"}
-    <RemindersView />
-  {:else if $activeView === "pairing"}
-    <PairingView />
   {:else if $activeView === "settings"}
     <SettingsView />
   {/if}
@@ -103,6 +112,52 @@
     color: var(--accent);
   }
   .drag { flex: 1; height: 100%; }
+
+  /* Titlebar action button (Settings gear / back arrow). Non-draggable so it
+     stays clickable inside the drag region. */
+  .tb-btn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    line-height: 0;
+  }
+  .tb-btn:hover { background: var(--surface-hover); color: var(--text); filter: none; }
+  .tb-btn.active { background: var(--surface-2); color: var(--text); }
+  .tb-btn .badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    min-width: .9rem;
+    height: .9rem;
+    padding: 0 .25rem;
+    font-size: .6rem;
+  }
+
+  .status-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: .25rem;
+  }
+  .status-dot .count { color: var(--text-muted); }
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--outline);
+    flex-shrink: 0;
+  }
+  .dot.running { background: #34a853; }
+  .dot.err { background: var(--error); }
 
   .shell {
     display: flex;

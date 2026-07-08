@@ -50,9 +50,7 @@
     text-align: left;
     background: transparent;
     color: var(--on-surface);
-    border-radius: var(--radius-md);
-    padding: .55rem .65rem;
-    border: 1px solid transparent;
+    padding: .6rem .65rem;
   }
   .row-btn:hover { background: var(--surface-2); }
   .row-btn.selected { background: var(--primary-container); color: var(--on-primary-container); }

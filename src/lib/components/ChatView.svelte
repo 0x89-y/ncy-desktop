@@ -857,41 +857,43 @@
         </div>
       {/if}
       <div class="compose-row">
-        <button
-          type="button"
-          class="attach"
-          title="Attach image"
-          aria-label="Attach image"
-          onclick={attachImage}
-          disabled={sending}
-        >
-          <Plus size={18} strokeWidth={2.25} />
-        </button>
-        <button
-          type="button"
-          class="attach"
-          title="New checklist"
-          aria-label="New checklist"
-          onclick={() => { checklistOpen = !checklistOpen; }}
-          disabled={sending}
-        >
-          <ListChecks size={18} strokeWidth={2.25} />
-        </button>
-        <button
-          type="button"
-          class="attach"
-          class:recording
-          title={recording ? "Stop recording" : "Record voice message"}
-          aria-label={recording ? "Stop recording" : "Record voice message"}
-          onclick={recording ? stopRecording : startRecording}
-          disabled={sending && !recording}
-        >
-          {#if recording}
-            <Square size={16} strokeWidth={2.25} />
-          {:else}
-            <Mic size={18} strokeWidth={2.25} />
-          {/if}
-        </button>
+        <div class="attach-group">
+          <button
+            type="button"
+            class="attach"
+            title="Attach image"
+            aria-label="Attach image"
+            onclick={attachImage}
+            disabled={sending}
+          >
+            <Plus size={18} strokeWidth={2.25} />
+          </button>
+          <button
+            type="button"
+            class="attach"
+            title="New checklist"
+            aria-label="New checklist"
+            onclick={() => { checklistOpen = !checklistOpen; }}
+            disabled={sending}
+          >
+            <ListChecks size={18} strokeWidth={2.25} />
+          </button>
+          <button
+            type="button"
+            class="attach"
+            class:recording
+            title={recording ? "Stop recording" : "Record voice message"}
+            aria-label={recording ? "Stop recording" : "Record voice message"}
+            onclick={recording ? stopRecording : startRecording}
+            disabled={sending && !recording}
+          >
+            {#if recording}
+              <Square size={16} strokeWidth={2.25} />
+            {:else}
+              <Mic size={18} strokeWidth={2.25} />
+            {/if}
+          </button>
+        </div>
         {#if recording}
           <span class="rec-indicator" title="Recording…">
             <span class="rec-dot"></span>
@@ -1031,8 +1033,18 @@
   }
   .compose-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     gap: .5rem;
+  }
+  /* Connected segmented group for the +, checklist and mic buttons. */
+  .attach-group {
+    display: inline-flex;
+    align-items: stretch;
+    flex-shrink: 0;
+    align-self: center;
+    border: 1px solid var(--outline-variant);
+    border-radius: 12px;
+    overflow: hidden;
   }
   .compose-input {
     flex: 1;
@@ -1053,7 +1065,7 @@
   }
   .send {
     padding: .5rem .9rem;
-    border-radius: 999px;
+    border-radius: var(--radius);
     border: none;
     background: var(--accent, var(--bubble-mine));
     color: var(--accent-on, var(--bubble-mine-on));
@@ -1069,17 +1081,18 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: .4rem .5rem;
-    border-radius: 12px;
-    border: 1px solid var(--outline-variant);
+    padding: .45rem .6rem;
+    border: none;
+    border-radius: 0;
     background: transparent;
     color: var(--text-muted);
     font: inherit;
     cursor: pointer;
     line-height: 0;
   }
-  .attach:hover:not(:disabled) { color: var(--text); }
+  .attach + .attach { border-left: 1px solid var(--outline-variant); }
   .attach:hover:not(:disabled) {
+    color: var(--text);
     background: var(--surface-2, var(--surface));
   }
   .attach:disabled {
@@ -1088,7 +1101,7 @@
   }
   .attach.recording {
     color: var(--danger);
-    border-color: var(--danger);
+    background: color-mix(in oklab, var(--danger) 12%, transparent);
   }
   .rec-indicator {
     display: inline-flex;
@@ -1240,7 +1253,7 @@
     font: inherit;
     font-size: .85rem;
     padding: .35rem .7rem;
-    border-radius: 999px;
+    border-radius: var(--radius);
     cursor: pointer;
     line-height: 1;
     align-self: center;
@@ -1257,7 +1270,7 @@
     font: inherit;
     line-height: 0;
     padding: .3rem;
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .menu-btn:hover { background: var(--surface-2, var(--surface)); }

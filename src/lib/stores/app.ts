@@ -61,19 +61,30 @@ export function setTranscriptionError(messageId: string, message: string) {
 
 export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
-export const activeView = writable<"chats" | "search" | "starred" | "reminders" | "pairing" | "settings">("chats");
 
-/** Sidebar collapsed state — icon-only rail when true. Persisted per-device
- *  in `localStorage` so it survives restarts. */
-const SIDEBAR_KEY = "ncy:sidebar-collapsed";
-const initialCollapsed =
-  typeof localStorage !== "undefined" && localStorage.getItem(SIDEBAR_KEY) === "1";
-export const sidebarCollapsed = writable<boolean>(initialCollapsed);
-sidebarCollapsed.subscribe((v) => {
+/** Top-level view. Search/Starred/Reminders now live as tabs inside the chats
+ *  view (see `chatPane`); pairing moved into settings (see `settingsTab`). */
+export type View = "chats" | "settings";
+export const activeView = writable<View>("chats");
+
+/** Which sub-view fills the left list pane inside the chats view. */
+export type ChatPane = "chats" | "search" | "starred" | "reminders";
+export const chatPane = writable<ChatPane>("chats");
+
+/** Active section within the settings view. Persisted per-device so reopening
+ *  Settings lands on the last-used section. */
+export type SettingsTab = "general" | "appearance" | "voice" | "devices" | "backup";
+const SETTINGS_TAB_KEY = "ncy:settings-tab";
+const initialSettingsTab =
+  (typeof localStorage !== "undefined" &&
+    (localStorage.getItem(SETTINGS_TAB_KEY) as SettingsTab | null)) || "general";
+export const settingsTab = writable<SettingsTab>(initialSettingsTab);
+settingsTab.subscribe((v) => {
   if (typeof localStorage !== "undefined") {
-    localStorage.setItem(SIDEBAR_KEY, v ? "1" : "0");
+    localStorage.setItem(SETTINGS_TAB_KEY, v);
   }
 });
+
 export const activeTag = writable<string | null>(null);
 /** Profile sync: which phone profile the chat list is scoped to.
  *  `null` = all profiles, `""` = the legacy/pre-profile-sync "Default" bucket,

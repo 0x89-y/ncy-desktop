@@ -1,12 +1,8 @@
 <script lang="ts">
-  import { activeChatId, visibleChats, selectChat, filterText, showArchived, allTags, activeTag, profileBuckets, activeProfileId, refreshChats, refreshActiveChat } from "../stores/app";
+  import { activeChatId, visibleChats, selectChat, showArchived, allTags, activeTag, profileBuckets, activeProfileId, refreshChats, refreshActiveChat } from "../stores/app";
   import { api, type ChatSummary } from "../ipc";
   import ChatListItem from "./ChatListItem.svelte";
-
-  let filter = $state("");
-  $effect(() => {
-    filterText.set(filter);
-  });
+  import { Plus, Archive } from "@lucide/svelte";
 
   function setTag(t: string | null) {
     activeTag.set(t);
@@ -204,36 +200,31 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="wrap col">
-  {#if $profileBuckets.length > 1}
-    <div class="row profiles">
-      <button
-        class="chip"
-        class:active={$activeProfileId === null}
-        onclick={() => setProfile(null)}
-      >All</button>
-      {#each $profileBuckets as p (p.id)}
+  <div class="row profiles">
+    {#if $profileBuckets.length > 1}
+      <div class="chip-seg">
         <button
-          class="chip"
-          class:active={$activeProfileId === p.id}
-          onclick={() => setProfile(p.id)}
-          title={p.name}
-        >{p.name}</button>
-      {/each}
-    </div>
-  {/if}
-
-  <div class="row controls">
-    <input
-      type="search"
-      placeholder="Search chats…"
-      bind:value={filter}
-    />
+          class="chip-seg-btn"
+          class:active={$activeProfileId === null}
+          onclick={() => setProfile(null)}
+        >All</button>
+        {#each $profileBuckets as p (p.id)}
+          <button
+            class="chip-seg-btn"
+            class:active={$activeProfileId === p.id}
+            onclick={() => setProfile(p.id)}
+            title={p.name}
+          >{p.name}</button>
+        {/each}
+      </div>
+    {/if}
     <button
-      class="new-btn"
-      title="New chat"
-      aria-label="New chat"
-      onclick={startCreate}
-    >+</button>
+      class="archive-btn"
+      class:active={$showArchived}
+      onclick={() => showArchived.update((v) => !v)}
+      title={$showArchived ? "Hide archived chats" : "Show archived chats"}
+      aria-label="Toggle archived chats"
+    ><Archive size={15} strokeWidth={2.25} /></button>
   </div>
 
   {#if creating}
@@ -319,29 +310,26 @@
       </div>
     </div>
   {/if}
-  <label class="row tiny muted toggle">
-    <input type="checkbox" bind:checked={$showArchived} />
-    Show archived
-  </label>
-
   {#if $allTags.length}
     <div class="row tags">
-      <button
-        class="chip"
-        class:active={$activeTag === null}
-        onclick={() => setTag(null)}
-      >all</button>
-      {#each $allTags as t (t)}
+      <div class="chip-seg">
         <button
-          class="chip"
-          class:active={$activeTag === t}
-          onclick={() => setTag(t)}
-        >#{t}</button>
-      {/each}
+          class="chip-seg-btn"
+          class:active={$activeTag === null}
+          onclick={() => setTag(null)}
+        >all</button>
+        {#each $allTags as t (t)}
+          <button
+            class="chip-seg-btn"
+            class:active={$activeTag === t}
+            onclick={() => setTag(t)}
+          >#{t}</button>
+        {/each}
+      </div>
     </div>
   {/if}
 
-  <div class="list scroll">
+  <div class="list scroll divided-list">
     {#each $visibleChats as c (c.id)}
       <ChatListItem
         chat={c}
@@ -353,6 +341,12 @@
       <div class="empty muted">No chats yet. Create one with +, or pair a phone to sync.</div>
     {/each}
   </div>
+
+  {#if !creating}
+    <button class="fab" title="New chat" aria-label="New chat" onclick={startCreate}>
+      <Plus size={22} strokeWidth={2.5} />
+    </button>
+  {/if}
 </div>
 
 {#if ctx}
@@ -379,41 +373,37 @@
 
 <style>
   .wrap {
+    position: relative;
     height: 100%;
     padding: .75rem;
     gap: .5rem;
   }
-  .controls {
-    gap: .4rem;
-    align-items: center;
-  }
-  .controls input {
-    flex: 1;
-  }
-  .new-btn {
-    flex-shrink: 0;
-    width: 2rem;
-    height: 2rem;
+  /* Floating "New chat" action — sits in the bottom-right corner of the list
+     pane so it never consumes a row. Anchored to `.wrap` (which doesn't scroll;
+     only the inner `.list` does), so it stays put over the list. */
+  .fab {
+    position: absolute;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: 5;
+    width: 44px;
+    height: 44px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant);
-    background: transparent;
-    color: inherit;
-    font-size: 1.25rem;
-    line-height: 1;
-    cursor: pointer;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow, 0 4px 14px rgba(0, 0, 0, .3));
   }
-  .new-btn:hover { background: var(--surface-2, var(--surface)); }
   .create {
     gap: .4rem;
     align-items: center;
+    flex-wrap: wrap;
     padding: 0 .25rem;
   }
   .create input {
-    flex: 1;
+    flex: 1 1 100%;
+    min-width: 0;
     padding: .4rem .55rem;
     border-radius: 10px;
     border: 1px solid var(--outline-variant);
@@ -423,7 +413,7 @@
   }
   .create .primary {
     padding: .4rem .8rem;
-    border-radius: 999px;
+    border-radius: var(--radius);
     border: none;
     background: var(--primary);
     color: var(--on-primary);
@@ -461,7 +451,7 @@
   }
   .create-pin .primary {
     padding: .4rem .8rem;
-    border-radius: 999px;
+    border-radius: var(--radius);
     border: none;
     background: var(--primary);
     color: var(--on-primary);
@@ -477,44 +467,71 @@
     font: inherit;
     cursor: pointer;
   }
-  .toggle {
-    padding: 0 .25rem;
-    user-select: none;
-  }
-  .toggle input { margin: 0; }
   .tags {
-    flex-wrap: wrap;
-    gap: .25rem;
     padding: 0 .25rem .25rem;
   }
+  /* Icon-only "show archived" toggle, sitting at the right of the profiles row. */
+  .archive-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    line-height: 0;
+  }
+  .archive-btn:hover:not(.active) { background: var(--surface-hover); color: var(--text); }
+  .archive-btn.active {
+    background: var(--accent);
+    color: var(--accent-contrast);
+    border-color: var(--accent);
+  }
   .profiles {
-    flex-wrap: wrap;
     gap: .25rem;
     padding: 0 .25rem .25rem;
     border-bottom: 1px solid var(--outline-variant);
     margin-bottom: .25rem;
   }
-  .profiles .chip {
+  /* Connected segmented control for the profile buckets. */
+  .chip-seg {
+    display: inline-flex;
+    align-items: stretch;
+    max-width: 100%;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .chip-seg-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 0;
+    padding: .3rem .65rem;
+    font-size: .8rem;
+    font-weight: 500;
+    line-height: 1.2;
     max-width: 120px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .chip {
-    cursor: pointer;
-    border: 1px solid transparent;
-  }
-  .chip.active {
-    background: var(--primary-container);
-    color: var(--on-primary-container);
-    border-color: var(--primary);
-  }
+  .chip-seg-btn + .chip-seg-btn { border-left: 1px solid var(--border-strong); }
+  .chip-seg-btn:hover:not(.active) { background: var(--surface-hover); color: var(--text); }
+  .chip-seg-btn.active { background: var(--accent); color: var(--accent-contrast); }
+  /* `.divided-list` (global) supplies the border, radius and row dividers;
+     keep the flex fill and re-enable vertical scroll (the global rule clips
+     overflow to round the corners). */
   .list {
     flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: .25rem;
-    padding-right: .25rem;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
   }
   .empty {
     padding: 2rem 1rem;

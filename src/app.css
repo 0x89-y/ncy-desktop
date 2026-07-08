@@ -27,7 +27,7 @@
   --danger: #dc2626;
   --success: #16a34a;
   --warning: #d97706;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 6px 20px rgba(0, 0, 0, 0.04);
+  --shadow: none;
   --card-shadow: none;
 
   /* ---- Legacy ncy aliases — map onto the Acy tokens above. Lets every
@@ -67,8 +67,8 @@
   --danger: #f87171;
   --success: #4ade80;
   --warning: #fbbf24;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 34px rgba(0, 0, 0, 0.45);
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow: none;
+  --card-shadow: none;
 }
 
 /* Accent presets — light values; dark variants below at higher specificity. */
@@ -140,7 +140,7 @@ button {
   background: var(--accent);
   color: var(--accent-contrast);
   padding: .55rem 1rem;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius);
   transition: background .15s ease, border-color .15s ease, opacity .15s ease;
 }
 button:hover:not(:disabled) { background: var(--accent-hover); }
@@ -187,7 +187,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   align-items: center;
   gap: .25rem;
   padding: .15rem .55rem;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -200,7 +200,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   min-width: 1.25rem;
   height: 1.25rem;
   padding: 0 .35rem;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--accent-contrast);
   font-size: .75rem;
@@ -218,4 +218,88 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   border-radius: var(--radius);
   box-shadow: var(--card-shadow);
   padding: 1rem;
+}
+
+/* Slim bordered container with hairline dividers between rows — the Settings
+   `.opt-list` look, generalized for the main screen (chat list + search /
+   starred / reminders results). Rows keep their own padding + hover. */
+.divided-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+.divided-list > * { border-top: 1px solid var(--border); }
+.divided-list > :first-child { border-top: none; }
+/* Row buttons must be flush — otherwise they inherit the global button pill
+   radius and their hover/selected fill bulges past the dividers. The container's
+   own radius still rounds the outer corners via overflow clipping. */
+.divided-list button { border-radius: 0; }
+
+/* Settings screen — Acy-style card-less layout. Sections are borderless
+   `.group`s; controls sit inside bordered `.opt-list` row groups; free content
+   uses `.panel`. Scoped under `.settings` so it also reaches the embedded
+   DevicesPane (a child component) without touching the rest of the app. */
+.settings .group { margin: 0 0 1.75rem; }
+.settings .group:last-child { margin-bottom: 0; }
+.settings .group > h2 {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin: 0 0 .75rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.settings .hint {
+  margin: -.15rem 0 .8rem;
+  max-width: 560px;
+  color: var(--text-muted);
+  font-size: .82rem;
+  line-height: 1.45;
+}
+.settings .field { display: flex; flex-direction: column; gap: .4rem; }
+.settings .field-label { font-size: .82rem; color: var(--text-muted); }
+/* Bordered container that separates each direct child with a thin divider —
+   the Appearance-style look, now used for every settings group. Children can be
+   `.opt-row`s (horizontal control rows) or `.field`s (label-above-input). */
+.settings .opt-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.settings .opt-list > * {
+  margin: 0;
+  padding: .7rem .8rem;
+  border-top: 1px solid var(--border);
+}
+.settings .opt-list > :first-child { border-top: none; }
+.settings .opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.settings .opt-label { min-width: 0; font-size: .9rem; font-weight: 500; }
+.settings .panel {
+  display: flex;
+  flex-direction: column;
+  gap: .6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .85rem;
+}
+/* Crisper, width-constrained inputs so short fields (name, port, label) don't
+   stretch the full pane. Textareas keep their own full-width styling. */
+.settings input[type="text"],
+.settings input[type="number"],
+.settings select {
+  width: 100%;
+  max-width: 360px;
+  padding: .5rem .7rem;
+  border-color: var(--border-strong);
+  border-radius: var(--radius-sm);
 }
