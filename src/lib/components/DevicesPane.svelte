@@ -1,6 +1,6 @@
 <script lang="ts">
   import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-  import { api } from "../ipc";
+  import { api, type PairAttempt } from "../ipc";
   import {
     pairings,
     refreshPairings,
@@ -15,6 +15,7 @@
   } from "../stores/app";
   import { formatFullTime } from "../format";
   import { X } from "@lucide/svelte";
+  import { onMount } from "svelte";
 
   let label = $state("");
   let busy = $state(false);
@@ -87,6 +88,39 @@
     await api.deletePeer(id);
     await refreshPeers();
   }
+
+  // --- Pair-attempts audit log (2026-07-07) ---
+  let pairAttempts = $state<PairAttempt[]>([]);
+  async function refreshPairAttempts() {
+    try {
+      const attempts = await api.listPairAttempts();
+      pairAttempts = [...attempts].reverse(); // newest first for scannability
+    } catch {
+      /* non-fatal; leave previous list */
+    }
+  }
+  function fmtOutcome(o: string): string {
+    switch (o) {
+      case "accepted": return "Accepted";
+      case "rejected": return "Rejected";
+      case "timeout": return "Timed out";
+      case "cancelled": return "Cancelled";
+      case "rate-limited": return "Rate-limited";
+      case "discovery-off": return "Discovery off";
+      case "bad-pubkey": return "Bad pubkey";
+      case "server-error": return "Server error";
+      default: return o;
+    }
+  }
+  function fmtRelativeTime(ms: number): string {
+    const delta = Date.now() - ms;
+    if (delta < 60_000) return "just now";
+    if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
+    if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
+    const days = Math.floor(delta / 86_400_000);
+    return `${days}d ago`;
+  }
+  onMount(refreshPairAttempts);
 </script>
 
 <div class="devices">
@@ -254,6 +288,41 @@
       <div class="muted tiny">No desktop peers yet.</div>
     {/if}
   </section>
+
+  <section class="group">
+    <h2>Recent pair attempts</h2>
+    <p class="hint">
+      Discovery-initiated pair requests hitting this desktop — accepted,
+      rejected, timed out, or blocked by the security gates (rate limit,
+      discoverability off, malformed handshake). Last 100 in memory; cleared
+      on restart.
+    </p>
+    <div class="row" style="gap:.5rem;">
+      <button class="ghost" onclick={refreshPairAttempts}>Refresh</button>
+    </div>
+    {#if pairAttempts.length === 0}
+      <p class="hint">No pair attempts yet.</p>
+    {:else}
+      <div class="attempts">
+        {#each pairAttempts as a}
+          <div class="attempt-row row">
+            <span
+              class="attempt-outcome"
+              class:accepted={a.outcome === "accepted"}
+              class:rejected={a.outcome === "rejected" || a.outcome === "bad-pubkey" || a.outcome === "rate-limited" || a.outcome === "discovery-off"}
+              class:warned={a.outcome === "timeout" || a.outcome === "cancelled" || a.outcome === "server-error"}
+            >{fmtOutcome(a.outcome)}</span>
+            <span class="tiny">{a.phoneName ?? "(no name)"}</span>
+            <span class="tiny muted">from {a.sourceIp}</span>
+            <span class="spacer"></span>
+            <span class="tiny muted" title={new Date(a.timestampMs).toLocaleString()}>
+              {fmtRelativeTime(a.timestampMs)}
+            </span>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 </div>
 
 <style>
@@ -287,6 +356,46 @@
     line-height: 0;
   }
   .icon-btn:hover { background: var(--surface-hover); color: var(--danger); filter: none; }
+  /* --- Pair-attempts audit log --- */
+  .attempts {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 260px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+  .attempt-row {
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .attempt-row:last-child { border-bottom: none; }
+  .attempt-outcome {
+    display: inline-flex;
+    padding: 1px 8px;
+    border-radius: var(--radius-pill, 999px);
+    font-size: 0.72rem;
+    font-weight: 600;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    min-width: 84px;
+    justify-content: center;
+  }
+  .attempt-outcome.accepted {
+    background: color-mix(in srgb, var(--success, #34a853) 20%, transparent);
+    color: var(--success, #34a853);
+  }
+  .attempt-outcome.rejected {
+    background: color-mix(in srgb, var(--danger, #b00) 18%, transparent);
+    color: var(--danger, #b00);
+  }
+  .attempt-outcome.warned {
+    background: color-mix(in srgb, var(--warning, #d0a000) 22%, transparent);
+    color: var(--warning, #d0a000);
+  }
+  .spacer { flex: 1; }
   .qrbox {
     align-items: stretch;
     gap: 1rem;

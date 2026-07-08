@@ -20,7 +20,8 @@ use crate::storage::{
 };
 use crate::sync::{
     run_peer_supervisor, run_server, BlobStore, DesktopClock, MdnsRegistration, OutboundEvent,
-    OutboundTx, PeerSyncDeps, ProtectionKeyStore, ServerContext, SyncEvent,
+    OutboundTx, PairSecurityState, PairingRegistry, PeerSyncDeps, ProtectionKeyStore,
+    ServerContext, SyncEvent,
 };
 
 /// Frontend-visible app state. Held by Tauri as a managed singleton.
@@ -51,6 +52,13 @@ pub struct AppState {
     pub peers: Arc<RwLock<PeerFile>>,
     /// Signalled after `peers` changes so the supervisor reconciles immediately.
     pub peer_notify: Arc<Notify>,
+    /// Pending discovery-initiated pair requests. Shared with the sync
+    /// `ServerContext` so the connection handler can register a session and
+    /// the `pair_accept` / `pair_reject` tauri commands can look it up.
+    pub pairing_registry: crate::sync::PairingRegistry,
+    /// Rate-limit state + audit log for pair attempts. Shared with the sync
+    /// server; the command layer reads it for `list_pair_attempts`.
+    pub pair_security: Arc<PairSecurityState>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -146,6 +154,10 @@ pub fn run() {
 
             let server_status = Arc::new(RwLock::new("starting"));
             let server_addr = Arc::new(RwLock::new(None::<String>));
+            let pairing_registry: PairingRegistry = Arc::new(tokio::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            ));
+            let pair_security = PairSecurityState::new(settings.discoverable);
 
             let state = AppState {
                 paths,
@@ -164,6 +176,8 @@ pub fn run() {
                 mdns: std::sync::Mutex::new(mdns),
                 peers: peers.clone(),
                 peer_notify: peer_notify.clone(),
+                pairing_registry: pairing_registry.clone(),
+                pair_security: pair_security.clone(),
             };
 
             let port = settings.port;
@@ -180,6 +194,8 @@ pub fn run() {
             let status_for_err = server_status.clone();
 
             // Spawn the WS server on the Tauri-managed Tokio runtime.
+            let pairing_registry_for_server = pairing_registry.clone();
+            let pair_security_for_server = pair_security.clone();
             tauri::async_runtime::spawn(async move {
                 let ctx = Arc::new(ServerContext {
                     identity_device_id: identity.device_id,
@@ -193,6 +209,8 @@ pub fn run() {
                     blobs: blobs_for_server,
                     server_status: status_for_server,
                     server_addr: addr_for_server,
+                    pairing_registry: pairing_registry_for_server,
+                    pair_security: pair_security_for_server,
                 });
                 let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
                 if let Err(e) = run_server(ctx, addr).await {
@@ -308,6 +326,9 @@ pub fn run() {
             commands::transcription_download_model,
             commands::transcription_delete_model,
             commands::transcription_open_folder,
+            commands::pair_accept,
+            commands::pair_reject,
+            commands::list_pair_attempts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

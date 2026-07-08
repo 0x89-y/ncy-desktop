@@ -171,7 +171,33 @@ export type SyncEventPayload =
   | { kind: "peer-disconnected"; peer: string }
   | { kind: "server-started"; addr: string }
   | { kind: "server-stopped" }
-  | { kind: "server-error"; message: string };
+  | { kind: "server-error"; message: string }
+  /** A phone discovered us over mDNS and is asking to pair. The UI shows a
+   *  confirmation modal; the user's decision routes back through
+   *  `pairAccept(sessionId, label)` or `pairReject(sessionId)`. Expires
+   *  after ~60s on the server side. `safetyCode` is a 6-digit fingerprint of
+   *  the ECDH handshake — the SAME code is shown on the phone's waiting
+   *  screen, and the user should visually verify they match before
+   *  confirming (defeats active MITM). */
+  | {
+      kind: "pair-requested";
+      sessionId: string;
+      peer: string;
+      phoneId: string;
+      phoneName: string;
+      safetyCode: string;
+    };
+
+/** Row in the pair-attempts audit log (Settings → Recent pair attempts). */
+export type PairAttempt = {
+  timestampMs: number;
+  sourceIp: string;
+  phoneId: string | null;
+  phoneName: string | null;
+  /** `"accepted"`, `"rejected"`, `"timeout"`, `"cancelled"`, `"rate-limited"`,
+   *  `"discovery-off"`, `"bad-pubkey"`, `"server-error"`. */
+  outcome: string;
+};
 
 export type MediaType = "voice" | "image";
 
@@ -279,6 +305,14 @@ export const api = {
     invoke<void>("transcription_delete_model"),
   transcriptionOpenFolder: () =>
     invoke<void>("transcription_open_folder"),
+
+  // Discovery-initiated pairing (2026-07-07): the phone opens a WebSocket,
+  // sends `PairRequest`, and this desktop's UI decides whether to accept.
+  pairAccept: (sessionId: string, label: string) =>
+    invoke<void>("pair_accept", { sessionId, label }),
+  pairReject: (sessionId: string) =>
+    invoke<void>("pair_reject", { sessionId }),
+  listPairAttempts: () => invoke<PairAttempt[]>("list_pair_attempts"),
   onTranscriptionEvent: (
     cb: (ev: TranscriptionEventPayload) => void,
   ): Promise<UnlistenFn> =>

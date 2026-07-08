@@ -5,6 +5,7 @@
   import ChatView from "./lib/components/ChatView.svelte";
   import WindowControls from "./lib/components/WindowControls.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
+  import PairRequestModal from "./lib/components/PairRequestModal.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import { Settings as SettingsIcon } from "@lucide/svelte";
 
@@ -87,6 +88,8 @@
     <SettingsView />
   {/if}
 </div>
+
+<PairRequestModal />
 
 <ResizeHandles />
 

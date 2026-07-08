@@ -245,6 +245,89 @@ pub async fn delete_pairing(state: State<'_, AppState>, id: String) -> Result<()
     save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())
 }
 
+// ---------- Discovery-initiated pairing (2026-07-07) ----------
+
+/// The frontend has confirmed a pending pair request. Generate a fresh
+/// pairing (same shape `create_pairing` returns), persist it, and hand the
+/// plaintext JSON to the server's pending-request handler — the server
+/// AES-256-GCM-seals it with the ECDH-derived key before it goes on the wire.
+/// The phone will then reconnect through the normal HMAC-authenticated
+/// `Hello` flow to actually sync.
+#[tauri::command]
+pub async fn pair_accept(
+    state: State<'_, AppState>,
+    session_id: String,
+    label: String,
+) -> Result<(), String> {
+    let session = {
+        let mut reg = state.pairing_registry.lock().await;
+        reg.remove(&session_id)
+    };
+    let session = session.ok_or_else(|| "no pending pair request (expired?)".to_string())?;
+
+    // Same pairing-generation flow `create_pairing` uses so anything you can
+    // pair via QR you can pair via mDNS.
+    let effective_label = if label.trim().is_empty() {
+        "Phone".to_string()
+    } else {
+        label
+    };
+    let pairing = Pairing::new_with_label(effective_label);
+    {
+        let mut guard = state.pairings.write().await;
+        guard.pairings.push(pairing.clone());
+        save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())?;
+    }
+    let settings = state.settings.read().await.clone();
+    let host = state.advertised_host.read().await.clone();
+    let payload = PairingPayload {
+        v: 1,
+        device_id: state.identity_device_id.clone(),
+        name: settings.device_name.clone(),
+        host,
+        port: settings.port,
+        secret: pairing.secret_b64.clone(),
+    };
+    let pairing_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+
+    session
+        .decision_tx
+        .send(crate::sync::PairDecision::Accept { pairing_json })
+        .map_err(|_| "server no longer waiting on this session".to_string())?;
+    Ok(())
+}
+
+/// Frontend rejected the pair request. Signal the waiting server handler.
+#[tauri::command]
+pub async fn pair_reject(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let session = {
+        let mut reg = state.pairing_registry.lock().await;
+        reg.remove(&session_id)
+    };
+    if let Some(session) = session {
+        let _ = session
+            .decision_tx
+            .send(crate::sync::PairDecision::Reject {
+                reason: "rejected".to_string(),
+            });
+    }
+    Ok(())
+}
+
+/// Recent pair-endpoint attempts (accepted, rejected, timed out, rate-limited,
+/// discovery-off, bad-pubkey). Backs the "Recent pair attempts" list in
+/// Settings so the user can spot unwanted activity. Newest last.
+#[tauri::command]
+pub async fn list_pair_attempts(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::sync::PairAttempt>, String> {
+    let q = state.pair_security.attempts.read().await;
+    Ok(q.iter().cloned().collect())
+}
+
 // ---------- Desktop↔desktop: outbound peers (client role) ----------
 
 /// The pairing payload another device produced (mirrors `PairingPayload` /
@@ -354,6 +437,11 @@ pub async fn update_settings(
 ) -> Result<AppSettings, String> {
     crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
     *state.settings.write().await = settings.clone();
+
+    // Keep the pair-endpoint gate in lock-step with the discoverable toggle.
+    // Turning discoverability OFF should immediately refuse new pair requests,
+    // not "next restart."
+    *state.pair_security.discoverable.write().await = settings.discoverable;
 
     // Reconcile mDNS advertising with the new `discoverable` setting — effective
     // immediately, no restart. When on, re-announce (drop + recreate) so a changed
@@ -1641,6 +1729,20 @@ fn ev_to_json(ev: &SyncEvent) -> serde_json::Value {
         SyncEvent::ServerError { message } => {
             serde_json::json!({"kind":"server-error","message":message})
         }
+        SyncEvent::PairRequested {
+            session_id,
+            peer,
+            phone_id,
+            phone_name,
+            safety_code,
+        } => serde_json::json!({
+            "kind":"pair-requested",
+            "sessionId": session_id,
+            "peer": peer,
+            "phoneId": phone_id,
+            "phoneName": phone_name,
+            "safetyCode": safety_code,
+        }),
     }
 }
 

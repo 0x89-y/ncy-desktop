@@ -59,6 +59,31 @@ export function setTranscriptionError(messageId: string, message: string) {
   transcriptionErrors.update((m) => ({ ...m, [messageId]: message }));
 }
 
+/** Discovery-initiated pair requests awaiting user confirmation. FIFO queue —
+ *  the modal shows the head; approving / rejecting drops it. Backend times
+ *  out after ~60s and drops its side, so entries that outlive that need to
+ *  be dismissed by the modal itself. */
+export type PendingPairRequest = {
+  sessionId: string;
+  peer: string;
+  phoneId: string;
+  phoneName: string;
+  /** 6-digit ECDH safety code. Same value is displayed on the phone's
+   *  waiting screen — visually compare before confirming. */
+  safetyCode: string;
+  arrivedAt: number;
+};
+export const pendingPairRequests = writable<PendingPairRequest[]>([]);
+export function enqueuePairRequest(r: Omit<PendingPairRequest, "arrivedAt">) {
+  pendingPairRequests.update((q) => [
+    ...q.filter((x) => x.sessionId !== r.sessionId),
+    { ...r, arrivedAt: Date.now() },
+  ]);
+}
+export function dropPairRequest(sessionId: string) {
+  pendingPairRequests.update((q) => q.filter((x) => x.sessionId !== sessionId));
+}
+
 export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
 
@@ -234,6 +259,15 @@ export async function bootstrap() {
           const next = new Set(s);
           next.add(ev.hash);
           return next;
+        });
+        break;
+      case "pair-requested":
+        enqueuePairRequest({
+          sessionId: ev.sessionId,
+          peer: ev.peer,
+          phoneId: ev.phoneId,
+          phoneName: ev.phoneName,
+          safetyCode: ev.safetyCode,
         });
         break;
     }
