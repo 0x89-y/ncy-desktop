@@ -11,6 +11,7 @@
     unmarkTranscribing,
     setTranscriptionError,
   } from "../stores/app";
+  import { openViewer } from "../stores/viewer";
   import RichText from "./RichText.svelte";
   import { formatFullTime, formatMessageTime } from "../format";
   import { Mic, Image as ImageIcon, AlarmClock, Check, Pencil, Star, Trash2, X } from "@lucide/svelte";
@@ -401,7 +402,15 @@
       </ul>
     {:else if message.type === "IMAGE"}
       {#if imageDataUrl}
-        <img class="image" src={imageDataUrl} alt="" />
+        <button
+          type="button"
+          class="image-btn"
+          onclick={() => imageHash && openViewer(imageHash)}
+          title="Open image"
+          aria-label="Open image"
+        >
+          <img class="image" src={imageDataUrl} alt="" />
+        </button>
       {:else if imageHash}
         <div class="image-placeholder muted tiny row">
           <ImageIcon size={14} strokeWidth={2.25} />
@@ -752,6 +761,19 @@
   .bubble.compact .transcript-error {
     margin-top: .2rem;
   }
+  /* A bare wrapper so the thumbnail is keyboard-reachable; it must not add any
+     box of its own or the bubble's image layout shifts. */
+  .image-btn {
+    display: block;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: 12px;
+    cursor: zoom-in;
+    line-height: 0;
+  }
+  .image-btn:hover { filter: none; }
+  .image-btn:hover .image { opacity: 0.92; }
   .image {
     display: block;
     max-width: 100%;

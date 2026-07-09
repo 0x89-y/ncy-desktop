@@ -1550,6 +1550,89 @@ pub async fn read_blob(
     Ok(Some(B64.encode(bytes)))
 }
 
+// ---------- Image viewer: view / save / copy ----------
+
+/// An image blob, ready to render — plus the format we had to sniff for it.
+/// No dimensions: the webview reads `naturalWidth`/`naturalHeight` off the
+/// `<img>`, so reporting them here would mean decoding the whole image twice.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImageView {
+    /// Base64 of the raw stored bytes, for a `data:` URL.
+    #[serde(rename = "dataB64")]
+    pub data_b64: String,
+    /// The real MIME type, so the `data:` URL doesn't lie about the payload.
+    pub mime: String,
+    /// The real extension, used as the save dialog's default.
+    pub ext: String,
+}
+
+/// Read an image blob and sniff what it actually is.
+///
+/// Nothing records an image's format: `author_send_image` stores whatever bytes
+/// the user picked and labels the reference `images/<hash>.jpg` regardless. So a
+/// PNG is on disk under a `.jpg` name. Sniff the magic bytes rather than trust
+/// that label, or we'd save a PNG as `photo.jpg`.
+fn load_image(state: &AppState, hash: &str) -> Result<(Vec<u8>, image::ImageFormat), String> {
+    if !state.blobs.exists(hash, "image") {
+        return Err("image not on this device yet".into());
+    }
+    let bytes = state.blobs.read(hash, "image").map_err(|e| e.to_string())?;
+    let format = image::guess_format(&bytes).map_err(|e| format!("unrecognized image: {e}"))?;
+    Ok((bytes, format))
+}
+
+#[tauri::command]
+pub async fn image_view(state: State<'_, AppState>, hash: String) -> Result<ImageView, String> {
+    use base64::{engine::general_purpose::STANDARD as B64, Engine};
+    let (bytes, format) = load_image(state.inner(), &hash)?;
+    Ok(ImageView {
+        data_b64: B64.encode(&bytes),
+        mime: format.to_mime_type().to_string(),
+        ext: format
+            .extensions_str()
+            .first()
+            .copied()
+            .unwrap_or("bin")
+            .to_string(),
+    })
+}
+
+/// Copy the stored bytes to `dest` verbatim — no re-encode, so the saved file is
+/// bit-identical to what the sender shared.
+#[tauri::command]
+pub async fn save_image(
+    state: State<'_, AppState>,
+    hash: String,
+    dest: String,
+) -> Result<(), String> {
+    let (bytes, _) = load_image(state.inner(), &hash)?;
+    std::fs::write(&dest, bytes).map_err(|e| format!("write {dest}: {e}"))
+}
+
+/// Put the image's pixels on the clipboard, so it pastes into Paint, Word, a
+/// chat box — anywhere expecting an image rather than a file.
+///
+/// The clipboard takes raw RGBA, not JPEG, hence the decode. Done here rather
+/// than via a canvas round-trip in the webview so the bytes never leave Rust.
+#[tauri::command]
+pub async fn copy_image(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    hash: String,
+) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    let (bytes, format) = load_image(state.inner(), &hash)?;
+    let decoded = image::load_from_memory_with_format(&bytes, format)
+        .map_err(|e| format!("decode image: {e}"))?
+        .to_rgba8();
+    let (width, height) = (decoded.width(), decoded.height());
+    let image = tauri::image::Image::new(decoded.as_raw(), width, height);
+    app.clipboard()
+        .write_image(&image)
+        .map_err(|e| format!("clipboard: {e}"))
+}
+
 // ---------- Standalone backup / restore ----------
 
 #[derive(Debug, Clone, Serialize)]
@@ -1918,6 +2001,61 @@ fn make_qr_svg(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 1x1 opaque red PNG. Real bytes, so it decodes as well as sniffs.
+    const RED_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D, 0xB0, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// A stored image is labelled `.jpg` whatever it is, so the viewer sniffs. The
+    /// save dialog shows whatever `extensions_str().first()` returns — pin the
+    /// exact strings, since "jpeg" vs "jpg" is user-visible in the filename.
+    #[test]
+    fn sniffed_format_drives_extension_and_mime() {
+        let png = image::guess_format(RED_PNG).expect("sniff png");
+        assert_eq!(png, image::ImageFormat::Png);
+        assert_eq!(png.extensions_str().first().copied(), Some("png"));
+        assert_eq!(png.to_mime_type(), "image/png");
+
+        // JPEG's SOI + APP0 marker is enough for guess_format.
+        let jpeg_magic = [0xFF, 0xD8, 0xFF, 0xE0];
+        let jpeg = image::guess_format(&jpeg_magic).expect("sniff jpeg");
+        assert_eq!(jpeg, image::ImageFormat::Jpeg);
+        assert_eq!(jpeg.extensions_str().first().copied(), Some("jpg"));
+        assert_eq!(jpeg.to_mime_type(), "image/jpeg");
+    }
+
+    /// A PNG mislabelled `.jpg` must not be reported as JPEG — that's the whole
+    /// reason `image_view` sniffs rather than reading the reference's extension.
+    #[test]
+    fn png_stored_under_a_jpg_reference_is_still_png() {
+        let format = image::guess_format(RED_PNG).expect("sniff");
+        assert_eq!(format.to_mime_type(), "image/png");
+    }
+
+    /// `copy_image` decodes to RGBA before handing pixels to the clipboard, which
+    /// cannot take JPEG. Check the decode path the command relies on.
+    #[test]
+    fn images_decode_to_rgba_for_the_clipboard() {
+        let format = image::guess_format(RED_PNG).unwrap();
+        let rgba = image::load_from_memory_with_format(RED_PNG, format)
+            .expect("decode")
+            .to_rgba8();
+        assert_eq!((rgba.width(), rgba.height()), (1, 1));
+        // 4 bytes per pixel is what tauri::image::Image::new expects.
+        assert_eq!(rgba.as_raw().len(), 4);
+        assert_eq!(rgba.as_raw()[3], 255, "alpha channel present");
+    }
+
+    /// Garbage must surface as an error, not a panic or a bogus ".bin" save.
+    #[test]
+    fn unrecognized_bytes_are_rejected() {
+        assert!(image::guess_format(b"not an image at all").is_err());
+    }
 
     /// A fresh install has no `desktop_prefs.json` at all, so it takes `Default`:
     /// sync off, and the close button asks rather than silently hiding.

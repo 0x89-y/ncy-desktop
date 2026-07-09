@@ -40,6 +40,16 @@ serde_json = "1.0"
 base64 = "0.22"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 qrcode = "0.14"
+# Sniffing a stored image's real format (we record none) and decoding it to RGBA
+# for the clipboard, which takes raw pixels rather than JPEG. Only the formats a
+# phone or desktop can plausibly send.
+image = { version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "webp",
+    "bmp",
+] }
 zip = "2"
 anyhow = "1.0"
 tracing = "0.1"

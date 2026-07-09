@@ -8,6 +8,7 @@
   import PairRequestModal from "./lib/components/PairRequestModal.svelte";
   import AppUpdateToast from "./lib/components/AppUpdateToast.svelte";
   import CloseToTrayPrompt from "./lib/components/CloseToTrayPrompt.svelte";
+  import ImageViewer from "./lib/components/ImageViewer.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import { initAppUpdater } from "./lib/stores/updater";
   import { initClosePrompt } from "./lib/stores/tray";
@@ -99,6 +100,8 @@
 </div>
 
 <PairRequestModal />
+
+<ImageViewer />
 
 <CloseToTrayPrompt />
 

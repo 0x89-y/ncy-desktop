@@ -153,6 +153,15 @@ export type DesktopPrefs = {
   syncServerEnabled: boolean;
 };
 
+/** An image blob plus its sniffed format. See the `image_view` command. */
+export type ImageView = {
+  dataB64: string;
+  /** Real MIME type of the bytes, e.g. "image/png" even for a `.jpg` reference. */
+  mime: string;
+  /** Real extension, used as the save dialog's default. */
+  ext: string;
+};
+
 export type WhisperStatus = {
   cliPresent: boolean;
   modelPresent: boolean;
@@ -295,6 +304,13 @@ export const api = {
   // Phase 2b — content-addressed media blobs.
   readBlob: (hash: string, mediaType: MediaType) =>
     invoke<string | null>("read_blob", { hash, mediaType }),
+
+  // Image viewer. `imageView` sniffs the real format — nothing records it, and
+  // every stored image is labelled `.jpg` whatever it actually is.
+  imageView: (hash: string) => invoke<ImageView>("image_view", { hash }),
+  saveImage: (hash: string, dest: string) =>
+    invoke<void>("save_image", { hash, dest }),
+  copyImage: (hash: string) => invoke<void>("copy_image", { hash }),
 
   // Standalone backup / restore (desktop's own data — events + blobs).
   exportBackup: (destPath: string) =>
