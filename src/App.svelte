@@ -6,7 +6,9 @@
   import WindowControls from "./lib/components/WindowControls.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import PairRequestModal from "./lib/components/PairRequestModal.svelte";
+  import AppUpdateToast from "./lib/components/AppUpdateToast.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
+  import { initAppUpdater } from "./lib/stores/updater";
   import { Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
@@ -32,6 +34,7 @@
     } finally {
       booted = true;
     }
+    initAppUpdater();
   });
 
   $effect(() => {
@@ -90,6 +93,8 @@
 </div>
 
 <PairRequestModal />
+
+<AppUpdateToast />
 
 <ResizeHandles />
 

@@ -35,16 +35,41 @@ runs are fast.
 
 ## Build a release
 
-Icons are already committed under `src-tauri/icons/`, so just:
+Releases are signed so the in-app updater will accept them. Generate the signing
+key once:
 
 ```bash
-npm run tauri:build
+npx tauri signer generate -w "$USERPROFILE/.ncy/ncy-updater.key"
 ```
 
-Output lands in `src-tauri/target/release/`:
+Keep `ncy-updater.key` private and backed up — losing it means existing installs
+can never be updated again, since they only trust its public half (baked into
+`tauri.conf.json` as `plugins.updater.pubkey`).
+
+Then, from the project root:
+
+```bat
+build.bat            :: NSIS installer + .sig  (prompts for the key password)
+publish-release.bat  :: stages release\ with the installer + latest.json
+```
+
+`build.bat` output lands in `src-tauri/target/release/`:
 
 - `ncy-desktop.exe` — standalone binary (needs WebView2, preinstalled on Win10/11)
-- `bundle/nsis/…-setup.exe`, `bundle/msi/….msi` — installers
+- `bundle/nsis/Ncy_<version>_x64-setup.exe` — installer, plus its `.sig`
+
+`publish-release.bat` renames the installer to the stable URL the updater points
+at and writes `latest.json` with the signature already inlined. Upload both files
+from `release/` to <https://0x89-y.xyz/ncy/>. Installed copies pick the update up
+on their next check (startup, then every 3 hours), or immediately via
+**Settings → About → Check now**.
+
+Bump the version in `package.json`, `src-tauri/Cargo.toml` and
+`src-tauri/tauri.conf.json` together, and add an entry to `src/lib/changelog.ts`
+— that's what Settings → About renders.
+
+`npm run tauri:build` still works for an unsigned local build, but the resulting
+installer can't be published as an update.
 
 > Note: `target/` gets large (multi-GB) — it's the Rust build cache and is
 > gitignored. `cargo clean` from `src-tauri/` reclaims it (slow next build).

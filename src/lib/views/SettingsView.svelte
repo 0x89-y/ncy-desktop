@@ -17,6 +17,13 @@
   } from "../stores/app";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getVersion } from "@tauri-apps/api/app";
+  import {
+    updaterPhase,
+    updaterVersion,
+    updaterError,
+    checkForUpdate,
+    installUpdate,
+  } from "../stores/updater";
   import { CHANGELOG } from "../changelog";
   import { Monitor, Sun, Moon, Mic, ArrowLeft, Save } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
@@ -52,6 +59,7 @@
     closeToTray: true,
     launchOnStartup: false,
     askBeforeDeleting: true,
+    autoCheckUpdates: true,
   });
   let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
@@ -652,6 +660,44 @@
         <span class="opt-label">Source</span>
         <a href="https://github.com/0x89-y" target="_blank" rel="noreferrer noopener">github.com/0x89-y</a>
       </div>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Updates</h2>
+    <div class="opt-list">
+      <label class="opt-row">
+        <span class="opt-label">Check for updates automatically</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.autoCheckUpdates}
+            onchange={(e) => updateDesktopPref("autoCheckUpdates", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <div class="opt-row">
+        <span class="opt-label">
+          {#if $updaterPhase === "checking"}Checking…
+          {:else if $updaterPhase === "available"}v{$updaterVersion} is available
+          {:else if $updaterPhase === "downloading"}Downloading…
+          {:else if $updaterPhase === "uptodate"}You're on the latest version
+          {:else if $updaterPhase === "error"}Check failed
+          {:else}Check for a new version{/if}
+        </span>
+        {#if $updaterPhase === "available"}
+          <button onclick={installUpdate}>Install &amp; restart</button>
+        {:else}
+          <button
+            onclick={checkForUpdate}
+            disabled={$updaterPhase === "checking" || $updaterPhase === "downloading"}
+          >Check now</button>
+        {/if}
+      </div>
+      {#if $updaterError}
+        <span class="muted tiny">{$updaterError}</span>
+      {/if}
     </div>
   </section>
 

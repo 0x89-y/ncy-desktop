@@ -144,6 +144,7 @@ export type DesktopPrefs = {
   closeToTray: boolean;
   launchOnStartup: boolean;
   askBeforeDeleting: boolean;
+  autoCheckUpdates: boolean;
 };
 
 export type WhisperStatus = {

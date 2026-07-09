@@ -9,4 +9,17 @@ export interface ChangelogEntry {
   changes: string[];
 }
 
-export const CHANGELOG: ChangelogEntry[] = [];
+export const CHANGELOG: ChangelogEntry[] = [
+  {
+    version: "0.4.1",
+    date: "2026-07-09",
+    changes: [
+      "Ncy now updates itself — you'll be told when a new version is out, and it installs in a click. Turn it off in About → Updates.",
+      "New tray and startup options: start minimized, keep running in the tray on close, launch with Windows.",
+      "Pick your own six quick reactions.",
+      "Message timestamps read as \"Yesterday\" or \"3 days ago\" instead of a raw date.",
+      "Settings reorganised into General, Sync, Interface, Transcription, Backup and About.",
+      "Chats from a reinstalled phone no longer show up as a duplicate profile.",
+    ],
+  },
+];

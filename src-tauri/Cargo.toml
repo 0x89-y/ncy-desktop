@@ -1,6 +1,6 @@
 [package]
 name = "ncy-desktop"
-version = "0.4.0"
+version = "0.4.1"
 description = "Desktop client for Ncy"
 authors = ["0x89-y"]
 edition = "2021"
@@ -24,6 +24,10 @@ tauri-plugin-dialog = "2.0.1"
 tauri-plugin-shell = "2.0.1"
 tauri-plugin-window-state = "2"
 tauri-plugin-notification = "2"
+# Self-update: `updater` fetches + signature-verifies the NSIS installer,
+# `process` relaunches into the freshly installed build.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 # Async runtime (command handlers use tokio::sync + spawn_blocking).
 tokio = { version = "1.41", features = ["full"] }

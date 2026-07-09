@@ -243,7 +243,7 @@ export async function refreshLanIps() {
  * trigger the OS prompt on launch.
  */
 let notifPermissionResolved: Promise<boolean> | null = null;
-async function ensureNotificationPermission(): Promise<boolean> {
+export async function ensureNotificationPermission(): Promise<boolean> {
   if (notifPermissionResolved) return notifPermissionResolved;
   notifPermissionResolved = (async () => {
     try {

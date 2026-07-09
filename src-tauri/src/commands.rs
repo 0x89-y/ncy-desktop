@@ -24,6 +24,8 @@ pub struct DesktopPrefs {
     pub launch_on_startup: bool,
     #[serde(rename = "askBeforeDeleting")]
     pub ask_before_deleting: bool,
+    #[serde(rename = "autoCheckUpdates")]
+    pub auto_check_updates: bool,
 }
 
 impl Default for DesktopPrefs {
@@ -33,6 +35,7 @@ impl Default for DesktopPrefs {
             close_to_tray: true,
             launch_on_startup: false,
             ask_before_deleting: true,
+            auto_check_updates: true,
         }
     }
 }
