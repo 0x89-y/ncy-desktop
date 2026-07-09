@@ -7,8 +7,10 @@
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import PairRequestModal from "./lib/components/PairRequestModal.svelte";
   import AppUpdateToast from "./lib/components/AppUpdateToast.svelte";
+  import CloseToTrayPrompt from "./lib/components/CloseToTrayPrompt.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import { initAppUpdater } from "./lib/stores/updater";
+  import { initClosePrompt } from "./lib/stores/tray";
   import { Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
@@ -29,6 +31,10 @@
   });
 
   onMount(async () => {
+    // Attach before `bootstrap` — Rust holds the ✕ and emits `close-requested`
+    // once, with no buffering for late listeners. Miss it and a close during
+    // startup would be swallowed, leaving a window that won't shut.
+    await initClosePrompt();
     try {
       await bootstrap();
     } finally {
@@ -93,6 +99,8 @@
 </div>
 
 <PairRequestModal />
+
+<CloseToTrayPrompt />
 
 <AppUpdateToast />
 

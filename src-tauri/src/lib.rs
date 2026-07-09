@@ -10,7 +10,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tokio::sync::{broadcast, Notify, RwLock};
 
 use crate::model::HlcTimestamp;
@@ -19,9 +19,9 @@ use crate::storage::{
     PairingFile, PeerFile,
 };
 use crate::sync::{
-    run_peer_supervisor, run_server, BlobStore, DesktopClock, MdnsRegistration, OutboundEvent,
-    OutboundTx, PairSecurityState, PairingRegistry, PeerSyncDeps, ProtectionKeyStore,
-    ServerContext, SyncEvent,
+    run_peer_supervisor_with_shutdown, run_server_with_shutdown, BlobStore, DesktopClock,
+    MdnsRegistration, OutboundEvent, OutboundTx, PairSecurityState, PairingRegistry, PeerSyncDeps,
+    ProtectionKeyStore, ServerContext, SyncEvent,
 };
 use commands::DesktopPrefs;
 
@@ -62,6 +62,113 @@ pub struct AppState {
     pub pair_security: Arc<PairSecurityState>,
     /// Desktop-only UI/runtime preferences (tray behavior, startup behavior).
     pub desktop_prefs: Arc<StdRwLock<DesktopPrefs>>,
+    /// Everything the WS listener needs, retained so the `syncServerEnabled`
+    /// toggle can respawn it after a stop without rebuilding the world.
+    pub server_ctx: Arc<ServerContext>,
+    /// Ditto for the outbound peer supervisor.
+    pub peer_deps: Arc<PeerSyncDeps>,
+    /// `Some` exactly while the sync stack is running. Doubles as the "is sync
+    /// up?" flag — see [`apply_sync_enabled`].
+    pub sync_shutdown: std::sync::Mutex<Option<SyncHandle>>,
+}
+
+/// Stop button for a running sync stack, plus the tasks to wait on afterwards.
+/// This is the sole owner of the shutdown sender, so dropping it stops the stack
+/// just as firing it does.
+pub struct SyncHandle {
+    shutdown: broadcast::Sender<()>,
+    server: tauri::async_runtime::JoinHandle<()>,
+    peers: tauri::async_runtime::JoinHandle<()>,
+}
+
+/// Spawn the WS listener and the outbound peer supervisor, returning the handle
+/// that stops both. Callers park it in [`AppState::sync_shutdown`].
+pub fn spawn_sync(state: &AppState, port: u16) -> SyncHandle {
+    let (shutdown, _) = broadcast::channel(1);
+
+    let ctx = state.server_ctx.clone();
+    let status_for_err = state.server_status.clone();
+    let bus_for_err = state.bus.clone();
+    let server_shutdown = shutdown.subscribe();
+    let server = tauri::async_runtime::spawn(async move {
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        if let Err(e) = run_server_with_shutdown(ctx, addr, server_shutdown).await {
+            tracing::error!("sync server fatal: {e}");
+            *status_for_err.write().await = "error";
+            let _ = bus_for_err.send(SyncEvent::ServerError {
+                message: e.to_string(),
+            });
+        }
+    });
+
+    let deps = state.peer_deps.clone();
+    let notify = state.peer_notify.clone();
+    let peer_shutdown = shutdown.subscribe();
+    let peers = tauri::async_runtime::spawn(async move {
+        run_peer_supervisor_with_shutdown(deps, notify, peer_shutdown).await;
+    });
+
+    SyncHandle {
+        shutdown,
+        server,
+        peers,
+    }
+}
+
+/// Reconcile the whole sync stack — listener, live connections, outbound peers,
+/// and mDNS advertising — with `enabled`. Idempotent, and effective immediately
+/// rather than "next restart".
+pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
+    // Scoped so the std Mutex guard never crosses an await.
+    let running = state.sync_shutdown.lock().unwrap().is_some();
+    if running == enabled {
+        return;
+    }
+
+    if enabled {
+        let settings = state.settings.read().await.clone();
+        *state.server_status.write().await = "starting";
+        let handle = spawn_sync(state, settings.port);
+        *state.sync_shutdown.lock().unwrap() = Some(handle);
+
+        // The listener hasn't bound yet, so advertise the configured port.
+        if settings.discoverable {
+            announce_mdns(state, &settings, settings.port).await;
+        }
+    } else {
+        let handle = state.sync_shutdown.lock().unwrap().take();
+        if let Some(handle) = handle {
+            let _ = handle.shutdown.send(());
+            // Wait for the listener to actually drop its socket. Without this, a
+            // quick off→on toggle would race the old bind and fail with
+            // "address already in use".
+            let _ = handle.server.await;
+            let _ = handle.peers.await;
+        }
+        // Nothing to reach: stop advertising too. `run_with_shutdown` publishes
+        // the "stopped" status and the ServerStopped event on its way out.
+        *state.mdns.lock().unwrap() = None;
+    }
+}
+
+/// (Re-)announce this desktop over mDNS-SD, replacing any live registration so a
+/// changed device name is picked up. Failures are logged, not fatal — manual
+/// QR/paste pairing works without discovery.
+pub async fn announce_mdns(state: &AppState, settings: &AppSettings, port: u16) {
+    let host = state.advertised_host.read().await.clone();
+    let mut guard = state.mdns.lock().unwrap();
+    match MdnsRegistration::announce(
+        &settings.device_name,
+        &host,
+        port,
+        &state.identity_device_id,
+    ) {
+        Ok(reg) => *guard = Some(reg),
+        Err(e) => {
+            tracing::warn!("mDNS announce failed: {e}");
+            *guard = None;
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -91,18 +198,30 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        // Hide-to-tray on close when enabled: keeps sync alive with no visible
-        // window. Right-click the tray icon → Quit always exits.
+        // Close (✕) behavior, in precedence order:
+        //   close_to_tray     → hide; sync keeps running with no visible window
+        //   ask_close_to_tray → hold the close and let the webview ask (see
+        //                       CloseToTrayPrompt.svelte), which then hides or quits
+        //   neither           → let it through, quitting the app
+        // Right-click the tray icon → Quit always exits, whatever the prefs say.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
-                    let close_to_tray = window
-                        .try_state::<AppState>()
-                        .and_then(|state| state.desktop_prefs.read().ok().map(|p| p.close_to_tray))
-                        .unwrap_or(true);
+                    let prefs = window.try_state::<AppState>().and_then(|state| {
+                        state
+                            .desktop_prefs
+                            .read()
+                            .ok()
+                            .map(|p| (p.close_to_tray, p.ask_close_to_tray))
+                    });
+                    // No state yet (close during startup): ask rather than guess.
+                    let (close_to_tray, ask_close_to_tray) = prefs.unwrap_or((false, true));
                     if close_to_tray {
                         api.prevent_close();
                         let _ = window.hide();
+                    } else if ask_close_to_tray {
+                        api.prevent_close();
+                        let _ = window.emit("close-requested", ());
                     }
                 }
             }
@@ -141,12 +260,16 @@ pub fn run() {
                 initial_max_hlc,
             ));
 
+            // The whole LAN sync stack is opt-in (`syncServerEnabled`). When it's
+            // off nothing binds, advertises, or dials out — Ncy runs standalone.
+            let sync_enabled = desktop_prefs.sync_server_enabled;
+
             // Opt-in mDNS announcement so phones can find this desktop on the LAN
             // without typing its IP. Off by default — on shared/large networks the
             // user may not want to broadcast the desktop's presence. The manual
             // QR/paste pairing path works regardless. Toggling `discoverable` in
             // settings starts/stops this at runtime (see `update_settings`).
-            let mdns = if settings.discoverable {
+            let mdns = if sync_enabled && settings.discoverable {
                 MdnsRegistration::announce(
                     &settings.device_name,
                     &advertised_host,
@@ -159,22 +282,63 @@ pub fn run() {
                 })
                 .ok()
             } else {
-                tracing::info!("mDNS advertising disabled (discoverable = false)");
+                tracing::info!("mDNS advertising disabled (discoverable = false, or sync off)");
                 None
             };
 
-            let server_status = Arc::new(RwLock::new("starting"));
+            // A disabled stack never reports "starting" — it goes straight to the
+            // terminal state the frontend renders as a dormant status dot.
+            let server_status = Arc::new(RwLock::new(if sync_enabled {
+                "starting"
+            } else {
+                "stopped"
+            }));
             let server_addr = Arc::new(RwLock::new(None::<String>));
             let pairing_registry: PairingRegistry = Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),
             ));
             let pair_security = PairSecurityState::new(settings.discoverable);
+            let pairings = Arc::new(RwLock::new(pairings));
 
+            // Built once and retained in `AppState`, so flipping `syncServerEnabled`
+            // back on can respawn the tasks without reopening stores or rebinding
+            // identity.
+            let server_ctx = Arc::new(ServerContext {
+                identity_device_id: identity.device_id.clone(),
+                identity_name: settings.device_name.clone(),
+                pairings: pairings.clone(),
+                pairings_path: paths.pairings.clone(),
+                events: events.clone(),
+                bus: bus.clone(),
+                clock: clock.clone(),
+                outbound: outbound.clone(),
+                blobs: blobs.clone(),
+                server_status: server_status.clone(),
+                server_addr: server_addr.clone(),
+                pairing_registry: pairing_registry.clone(),
+                pair_security: pair_security.clone(),
+            });
+
+            // The outbound-peer supervisor's deps (desktop↔desktop client role).
+            // It reconciles `peers.json` with live connections; `peer_notify`
+            // wakes it when a peer is added/removed.
+            let peer_deps = Arc::new(PeerSyncDeps {
+                identity_device_id: identity.device_id.clone(),
+                events: events.clone(),
+                bus: bus.clone(),
+                clock: clock.clone(),
+                outbound: outbound.clone(),
+                blobs: blobs.clone(),
+                peers: peers.clone(),
+                peers_path: paths.peers.clone(),
+            });
+
+            let port = settings.port;
             let state = AppState {
                 paths,
                 identity_device_id: identity.device_id.clone(),
                 events: events.clone(),
-                pairings: Arc::new(RwLock::new(pairings)),
+                pairings,
                 settings: Arc::new(RwLock::new(settings.clone())),
                 bus: bus.clone(),
                 advertised_host: Arc::new(RwLock::new(advertised_host)),
@@ -190,67 +354,19 @@ pub fn run() {
                 pairing_registry: pairing_registry.clone(),
                 pair_security: pair_security.clone(),
                 desktop_prefs: Arc::new(StdRwLock::new(desktop_prefs.clone())),
+                server_ctx,
+                peer_deps,
+                sync_shutdown: std::sync::Mutex::new(None),
             };
 
-            let port = settings.port;
-            let identity_name = settings.device_name.clone();
-            let pairings_clone = state.pairings.clone();
-            let events_clone = state.events.clone();
-            let pairings_path = state.paths.pairings.clone();
-            let bus_clone = bus.clone();
-            let clock_for_server = clock.clone();
-            let outbound_for_server = outbound.clone();
-            let blobs_for_server = blobs.clone();
-            let status_for_server = server_status.clone();
-            let addr_for_server = server_addr.clone();
-            let status_for_err = server_status.clone();
-
-            // Spawn the WS server on the Tauri-managed Tokio runtime.
-            let pairing_registry_for_server = pairing_registry.clone();
-            let pair_security_for_server = pair_security.clone();
-            tauri::async_runtime::spawn(async move {
-                let ctx = Arc::new(ServerContext {
-                    identity_device_id: identity.device_id,
-                    identity_name,
-                    pairings: pairings_clone,
-                    pairings_path,
-                    events: events_clone,
-                    bus: bus_clone.clone(),
-                    clock: clock_for_server,
-                    outbound: outbound_for_server,
-                    blobs: blobs_for_server,
-                    server_status: status_for_server,
-                    server_addr: addr_for_server,
-                    pairing_registry: pairing_registry_for_server,
-                    pair_security: pair_security_for_server,
-                });
-                let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-                if let Err(e) = run_server(ctx, addr).await {
-                    tracing::error!("sync server fatal: {e}");
-                    *status_for_err.write().await = "error";
-                    let _ = bus_clone.send(SyncEvent::ServerError {
-                        message: e.to_string(),
-                    });
-                }
-            });
-
-            // Spawn the outbound-peer supervisor (desktop↔desktop client role).
-            // It reconciles `peers.json` with live connections; `peer_notify`
-            // wakes it when a peer is added/removed.
-            let peer_deps = Arc::new(PeerSyncDeps {
-                identity_device_id: state.identity_device_id.clone(),
-                events: events.clone(),
-                bus: bus.clone(),
-                clock: clock.clone(),
-                outbound: outbound.clone(),
-                blobs: blobs.clone(),
-                peers: peers.clone(),
-                peers_path: state.paths.peers.clone(),
-            });
-            let peer_notify_for_sup = peer_notify.clone();
-            tauri::async_runtime::spawn(async move {
-                run_peer_supervisor(peer_deps, peer_notify_for_sup).await;
-            });
+            // Spawn the WS server + peer supervisor on the Tauri-managed Tokio
+            // runtime. `update_desktop_prefs` can stop and restart them later.
+            if sync_enabled {
+                let handle = spawn_sync(&state, port);
+                *state.sync_shutdown.lock().unwrap() = Some(handle);
+            } else {
+                tracing::info!("sync stack disabled (syncServerEnabled = false)");
+            }
 
             // Forward sync events to the webview.
             let app_handle = app.handle().clone();
@@ -260,8 +376,8 @@ pub fn run() {
             app.manage(state);
 
             // System tray. Left-click toggles the main window; right-click opens a
-            // small menu (Show / Quit). The menu is the only way to actually exit
-            // — closing the window just hides it (see on_window_event above).
+            // small menu (Show / Quit). Quit always exits, even while the close
+            // button is set to hide to the tray (see on_window_event above).
             let show_item = MenuItem::with_id(app, "tray_show", "Show Ncy", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "tray_quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_item, &quit_item])?;

@@ -18,24 +18,47 @@ use crate::AppState;
 pub struct DesktopPrefs {
     #[serde(rename = "startMinimized")]
     pub start_minimized: bool,
+    /// Closing the window hides to the tray instead of quitting. Off for fresh
+    /// installs — the first close asks instead (see `ask_close_to_tray`).
     #[serde(rename = "closeToTray")]
     pub close_to_tray: bool,
+    /// Offer "keep Ncy in the tray?" when closing while `close_to_tray` is off.
+    /// Cleared by the prompt's "Don't ask again".
+    #[serde(rename = "askCloseToTray")]
+    pub ask_close_to_tray: bool,
     #[serde(rename = "launchOnStartup")]
     pub launch_on_startup: bool,
     #[serde(rename = "askBeforeDeleting")]
     pub ask_before_deleting: bool,
     #[serde(rename = "autoCheckUpdates")]
     pub auto_check_updates: bool,
+    /// Run the LAN sync stack (WS listener, mDNS, outbound peers). Off for fresh
+    /// installs — Ncy works standalone, and sync is opt-in.
+    ///
+    /// The field default is `true`, not `false`: it only fires when a *existing*
+    /// `desktop_prefs.json` is read that predates this key, and those users are
+    /// already syncing with a phone. A fresh install has no file at all, so it
+    /// takes `Default` below and starts off.
+    #[serde(rename = "syncServerEnabled", default = "sync_enabled_for_existing_install")]
+    pub sync_server_enabled: bool,
+}
+
+/// See `DesktopPrefs::sync_server_enabled` — migration default for pre-existing
+/// config files, which must keep syncing after an upgrade.
+fn sync_enabled_for_existing_install() -> bool {
+    true
 }
 
 impl Default for DesktopPrefs {
     fn default() -> Self {
         Self {
             start_minimized: false,
-            close_to_tray: true,
+            close_to_tray: false,
+            ask_close_to_tray: true,
             launch_on_startup: false,
             ask_before_deleting: true,
             auto_check_updates: true,
+            sync_server_enabled: false,
         }
     }
 }
@@ -551,34 +574,21 @@ pub async fn update_settings(
     // immediately, no restart. When on, re-announce (drop + recreate) so a changed
     // device name is picked up too. Advertise the port the server actually bound
     // (a port change still needs a restart) so we never advertise a dead port.
-    let host = state.advertised_host.read().await.clone();
-    let bound_port = state
-        .server_addr
-        .read()
-        .await
-        .as_deref()
-        .and_then(|a| a.rsplit(':').next())
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(settings.port);
-    {
-        let mut guard = state.mdns.lock().unwrap();
-        if settings.discoverable {
-            match crate::sync::MdnsRegistration::announce(
-                &settings.device_name,
-                &host,
-                bound_port,
-                &state.identity_device_id,
-            ) {
-                Ok(reg) => *guard = Some(reg),
-                Err(e) => {
-                    tracing::warn!("mDNS re-announce failed: {e}");
-                    *guard = None;
-                }
-            }
-        } else {
-            // Drop the registration → mdns-sd unregisters the service.
-            *guard = None;
-        }
+    // With the sync stack switched off there is nothing to advertise at all.
+    let sync_running = state.sync_shutdown.lock().unwrap().is_some();
+    if settings.discoverable && sync_running {
+        let bound_port = state
+            .server_addr
+            .read()
+            .await
+            .as_deref()
+            .and_then(|a| a.rsplit(':').next())
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(settings.port);
+        crate::announce_mdns(&state, &settings, bound_port).await;
+    } else {
+        // Drop the registration → mdns-sd unregisters the service.
+        *state.mdns.lock().unwrap() = None;
     }
 
     Ok(settings)
@@ -597,6 +607,8 @@ pub async fn update_desktop_prefs(
     set_startup_enabled(prefs.launch_on_startup)?;
     save_desktop_prefs_file(&state.paths.settings, &prefs)?;
     *state.desktop_prefs.write().unwrap() = prefs.clone();
+    // Start or stop the LAN sync stack to match — effective immediately.
+    crate::apply_sync_enabled(&state, prefs.sync_server_enabled).await;
     Ok(prefs)
 }
 
@@ -1876,5 +1888,57 @@ fn make_qr_svg(text: &str) -> String {
             .quiet_zone(true)
             .build(),
         Err(_) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh install has no `desktop_prefs.json` at all, so it takes `Default`:
+    /// sync off, and the close button asks rather than silently hiding.
+    #[test]
+    fn fresh_install_defaults_to_sync_off_and_asking() {
+        let prefs = DesktopPrefs::default();
+        assert!(!prefs.sync_server_enabled);
+        assert!(!prefs.close_to_tray);
+        assert!(prefs.ask_close_to_tray);
+    }
+
+    /// An upgrade reads a file written before either key existed. Sync must stay
+    /// on — those users are already paired with a phone — and the recorded
+    /// `closeToTray` must survive the change of `Default`.
+    #[test]
+    fn existing_config_keeps_syncing_after_upgrade() {
+        let legacy = r#"{
+            "startMinimized": false,
+            "closeToTray": true,
+            "launchOnStartup": false,
+            "askBeforeDeleting": true,
+            "autoCheckUpdates": true
+        }"#;
+        let prefs: DesktopPrefs = serde_json::from_str(legacy).expect("parse legacy prefs");
+        assert!(prefs.sync_server_enabled, "upgrade must not stop sync");
+        assert!(prefs.close_to_tray, "recorded closeToTray must survive");
+        assert!(prefs.ask_close_to_tray);
+    }
+
+    /// Turning the toggle off has to stick across restarts — i.e. an explicit
+    /// `false` must not be overwritten by the migration default.
+    #[test]
+    fn explicit_sync_off_is_preserved() {
+        let prefs: DesktopPrefs =
+            serde_json::from_str(r#"{"syncServerEnabled": false}"#).expect("parse");
+        assert!(!prefs.sync_server_enabled);
+    }
+
+    /// Unknown/partial files must not wipe the remaining prefs (the container
+    /// `#[serde(default)]` fills the gaps).
+    #[test]
+    fn partial_config_fills_gaps_without_erroring() {
+        let prefs: DesktopPrefs =
+            serde_json::from_str(r#"{"startMinimized": true}"#).expect("parse");
+        assert!(prefs.start_minimized);
+        assert!(prefs.ask_before_deleting);
     }
 }

@@ -299,6 +299,11 @@ export async function bootstrap() {
         serverStatus.set("running");
         serverAddr.set(ev.addr);
         break;
+      case "server-stopped":
+        serverStatus.set("stopped");
+        serverAddr.set("");
+        connectedPeers.set(new Set());
+        break;
       case "server-error":
         serverStatus.set("error");
         break;
@@ -364,6 +369,9 @@ export async function bootstrap() {
       if (s.addr) serverAddr.set(s.addr);
     } else if (s.status === "error") {
       serverStatus.set("error");
+    } else if (s.status === "stopped") {
+      // Sync is switched off — no ServerStopped event ever fires for it.
+      serverStatus.set("stopped");
     }
   } catch {
     /* leave as "starting"; a later bus event may still correct it */

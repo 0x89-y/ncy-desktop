@@ -141,10 +141,16 @@ export type AppSettings = {
 
 export type DesktopPrefs = {
   startMinimized: boolean;
+  /** Closing the window hides to the tray instead of quitting. */
   closeToTray: boolean;
+  /** Offer "keep Ncy in the tray?" on close while `closeToTray` is off. */
+  askCloseToTray: boolean;
   launchOnStartup: boolean;
   askBeforeDeleting: boolean;
   autoCheckUpdates: boolean;
+  /** Run the LAN sync stack (WS listener, mDNS, outbound peers). Off by default
+   *  for fresh installs — Ncy works standalone and sync is opt-in. */
+  syncServerEnabled: boolean;
 };
 
 export type WhisperStatus = {

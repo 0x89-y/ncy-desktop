@@ -11,6 +11,8 @@
     quickReactions,
     messageDensity,
     setQuickReactions,
+    serverStatus,
+    serverAddr,
     REACTION_CHOICES,
     DEFAULT_QUICK_REACTIONS,
     type SettingsTab,
@@ -56,13 +58,27 @@
   let transcriptionEnabled = $state(false);
   let desktopPrefs = $state<DesktopPrefs>({
     startMinimized: false,
-    closeToTray: true,
+    closeToTray: false,
+    askCloseToTray: true,
     launchOnStartup: false,
     askBeforeDeleting: true,
     autoCheckUpdates: true,
+    syncServerEnabled: false,
   });
   let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
+
+  // Mirrors the titlebar dot, spelled out. "starting" is the brief window
+  // between flipping the toggle on and the listener binding its port.
+  const serverStatusLabel = $derived(
+    $serverStatus === "running"
+      ? `Listening on ${$serverAddr || "…"}`
+      : $serverStatus === "error"
+        ? "Failed to start — is the port already in use?"
+        : $serverStatus === "starting"
+          ? "Starting…"
+          : "Not running",
+  );
   let dirty = $state(false);
 
   // Platform-aware bits — whisper.cpp releases + install hints differ across
@@ -373,7 +389,10 @@
         </span>
       </label>
       <label class="opt-row">
-        <span class="opt-label">Close to tray</span>
+        <span class="opt-label">
+          Close to tray
+          <span class="inline-hint">Closing the window hides Ncy instead of quitting it.</span>
+        </span>
         <span class="switch">
           <input
             type="checkbox"
@@ -383,6 +402,22 @@
           <span class="slider"></span>
         </span>
       </label>
+      {#if !desktopPrefs.closeToTray}
+        <label class="opt-row">
+          <span class="opt-label">
+            Ask when closing
+            <span class="inline-hint">Offer to minimize to the tray instead of quitting.</span>
+          </span>
+          <span class="switch">
+            <input
+              type="checkbox"
+              checked={desktopPrefs.askCloseToTray}
+              onchange={(e) => updateDesktopPref("askCloseToTray", (e.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="slider"></span>
+          </span>
+        </label>
+      {/if}
       <label class="opt-row">
         <span class="opt-label">Launch on startup</span>
         <span class="switch">
@@ -414,6 +449,27 @@
   </section>
   {:else if $settingsTab === "sync"}
   <section class="group">
+    <h2>Sync server</h2>
+    <div class="opt-list">
+      <label class="opt-row">
+        <span class="opt-label">Enable sync</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.syncServerEnabled}
+            onchange={(e) => updateDesktopPref("syncServerEnabled", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <div class="opt-row">
+        <span class="opt-label">Status</span>
+        <span class="inline-hint">{serverStatusLabel}</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="group">
     <h2>This device</h2>
     <div class="opt-list">
       <label class="field">
@@ -433,37 +489,41 @@
     </div>
   </section>
 
-  <section class="group">
-    <h2>Nearby discovery</h2>
-    <div class="opt-list">
-      <label class="field">
-        <span class="field-label">Sync port · restart to apply</span>
-        <input
-          type="number"
-          min="1"
-          max="65535"
-          bind:value={port}
-          oninput={markDirty}
-        />
-      </label>
-      <label class="opt-row">
-        <span class="opt-label">
-          Visible to nearby devices
-          <span class="inline-hint">QR and JSON still work when off.</span>
-        </span>
-        <span class="switch">
+  <!-- Discovery and the paired-device list are inert without a running server,
+       so they collapse rather than sit there disabled. -->
+  {#if desktopPrefs.syncServerEnabled}
+    <section class="group">
+      <h2>Nearby discovery</h2>
+      <div class="opt-list">
+        <label class="field">
+          <span class="field-label">Sync port · restart to apply</span>
           <input
-            type="checkbox"
-            bind:checked={discoverable}
-            onchange={markDirty}
+            type="number"
+            min="1"
+            max="65535"
+            bind:value={port}
+            oninput={markDirty}
           />
-          <span class="slider"></span>
-        </span>
-      </label>
-    </div>
-  </section>
+        </label>
+        <label class="opt-row">
+          <span class="opt-label">
+            Visible to nearby devices
+            <span class="inline-hint">QR and JSON still work when off.</span>
+          </span>
+          <span class="switch">
+            <input
+              type="checkbox"
+              bind:checked={discoverable}
+              onchange={markDirty}
+            />
+            <span class="slider"></span>
+          </span>
+        </label>
+      </div>
+    </section>
 
-  <DevicesPane />
+    <DevicesPane />
+  {/if}
   {:else if $settingsTab === "interface"}
   <section class="group">
     <h2>Interface</h2>
