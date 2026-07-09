@@ -83,9 +83,24 @@ fn save_desktop_prefs_file(settings_path: &std::path::Path, prefs: &DesktopPrefs
     std::fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
+/// `CREATE_NO_WINDOW` — `reg.exe` is a console program, and Ncy is a GUI binary
+/// with no console to inherit, so without this every call flashes a black cmd
+/// box over the UI (on launch, and on any desktop-pref change).
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// A `reg.exe` invocation that stays invisible.
+#[cfg(windows)]
+fn reg_command() -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = std::process::Command::new("reg");
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 #[cfg(windows)]
 fn startup_enabled() -> Result<bool, String> {
-    let output = std::process::Command::new("reg")
+    let output = reg_command()
         .args([
             "query",
             r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -108,12 +123,12 @@ fn set_startup_enabled(enabled: bool) -> Result<(), String> {
     let output = if enabled {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let value = format!("\"{}\"", exe.display());
-        std::process::Command::new("reg")
+        reg_command()
             .args(["add", key, "/v", "Ncy", "/t", "REG_SZ", "/d", &value, "/f"])
             .output()
             .map_err(|e| e.to_string())?
     } else {
-        std::process::Command::new("reg")
+        reg_command()
             .args(["delete", key, "/v", "Ncy", "/f"])
             .output()
             .map_err(|e| e.to_string())?
@@ -604,7 +619,16 @@ pub async fn update_desktop_prefs(
     state: State<'_, AppState>,
     prefs: DesktopPrefs,
 ) -> Result<DesktopPrefs, String> {
-    set_startup_enabled(prefs.launch_on_startup)?;
+    // Only touch the registry when the startup pref actually changed. Every other
+    // pref (tray, sync, …) rides the same command, and shelling out to `reg.exe`
+    // for each of them is pure waste.
+    let startup_changed = {
+        let current = state.desktop_prefs.read().unwrap();
+        current.launch_on_startup != prefs.launch_on_startup
+    };
+    if startup_changed {
+        set_startup_enabled(prefs.launch_on_startup)?;
+    }
     save_desktop_prefs_file(&state.paths.settings, &prefs)?;
     *state.desktop_prefs.write().unwrap() = prefs.clone();
     // Start or stop the LAN sync stack to match — effective immediately.
