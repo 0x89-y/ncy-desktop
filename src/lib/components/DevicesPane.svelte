@@ -20,6 +20,7 @@
   let label = $state("");
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
+  let showSyncAddress = $state(false);
   // Per-pairing "Show pairing info" toggle. Claimed pairings hide the QR + JSON
   // by default (they're only needed for the first pairing handshake); the user
   // can reveal them here if they need to re-pair a lost phone from scratch.
@@ -63,7 +64,7 @@
     await refreshLanIps();
   }
 
-  // --- Sync with another desktop (this device is the client). ---
+  // --- Add another desktop as an outbound sync peer. ---
   let peerJson = $state("");
   let peerBusy = $state(false);
   let peerError = $state<string | null>(null);
@@ -89,7 +90,7 @@
     await refreshPeers();
   }
 
-  // --- Pair-attempts audit log (2026-07-07) ---
+  // --- Discovery request audit log (2026-07-07) ---
   let pairAttempts = $state<PairAttempt[]>([]);
   async function refreshPairAttempts() {
     try {
@@ -125,127 +126,52 @@
 
 <div class="devices">
   <section class="group">
-    <h2>Server</h2>
+    <h2>Add device</h2>
     <div class="opt-list">
       <div class="opt-row">
         <span class="opt-label">Status</span>
         <div class="row" style="gap:.5rem; align-items:center;">
-          <span class="muted tiny">
-            {$serverStatus}{#if $serverAddr} · {$serverAddr}{/if}
-          </span>
-          <button class="ghost" onclick={refreshIps}>Refresh IPs</button>
+          <span class="muted tiny">{$serverStatus}</span>
+          <button class="ghost" onclick={() => (showSyncAddress = !showSyncAddress)}>
+            {showSyncAddress ? "Hide address" : "Show address"}
+          </button>
         </div>
       </div>
-      <div class="field">
-        <span class="field-label">Advertise to phone as</span>
-        <div class="row" style="flex-wrap:wrap;gap:.4rem">
-          {#each $lanIps as ip (ip)}
-            <button
-              class="chip"
-              class:active={$advertisedHost === ip}
-              onclick={() => pickHost(ip)}
-            >{ip}</button>
-          {/each}
+      {#if showSyncAddress}
+        <div class="field">
+          <span class="field-label">Sync address</span>
+          {#if $serverAddr}
+            <span class="muted tiny">{$serverAddr}</span>
+          {/if}
+          <div class="row" style="flex-wrap:wrap;gap:.4rem">
+            {#each $lanIps as ip (ip)}
+              <button
+                class="chip"
+                class:active={$advertisedHost === ip}
+                onclick={() => pickHost(ip)}
+              >{ip}</button>
+            {/each}
+            <button class="ghost" onclick={refreshIps}>Refresh IPs</button>
+          </div>
         </div>
-      </div>
-    </div>
-  </section>
-
-  <section class="group">
-    <h2>New pairing</h2>
-    <div class="opt-list">
+      {/if}
       <div class="field">
-        <span class="field-label">Label</span>
+        <span class="field-label">Create QR code</span>
         <div class="row form">
           <input
             type="text"
-            placeholder="e.g. My phone"
+            placeholder="Label"
             bind:value={label}
             onkeydown={(e) => e.key === "Enter" && create()}
           />
           <button onclick={create} disabled={busy}>Create</button>
         </div>
       </div>
-    </div>
-    <p class="hint">
-      Create a pairing slot, then on the phone open Ncy → Settings → Sync devices
-      → paste the JSON or scan the QR. Each pairing has its own secret; removing
-      one makes the phone re-pair.
-    </p>
-  </section>
-
-  <section class="group">
-    <h2>Paired devices</h2>
-    <div class="col list">
-      {#each $pairings as p (p.pairing.id)}
-        {@const claimed = p.pairing.phoneId !== null}
-        {@const showBox = !claimed || revealed[p.pairing.id]}
-        <div class="panel pairing">
-          <div class="row" style="justify-content:space-between">
-            <div class="col">
-              <div class="row" style="gap:.45rem">
-                <span
-                  class="dot"
-                  class:paired={claimed}
-                  title={claimed ? "Paired" : "Awaiting device"}
-                ></span>
-                <strong>{p.pairing.label}</strong>
-              </div>
-              <span class="muted tiny">
-                Created {formatFullTime(p.pairing.createdAt)}
-                {#if p.pairing.lastSeenAt} · last seen {formatFullTime(p.pairing.lastSeenAt)}{/if}
-              </span>
-            </div>
-            <div class="row" style="gap:.3rem">
-              {#if claimed}
-                <button class="ghost" onclick={() => toggleReveal(p.pairing.id)}>
-                  {showBox ? "Hide" : "Show more"}
-                </button>
-              {/if}
-              <button
-                class="icon-btn"
-                onclick={() => remove(p.pairing.id)}
-                title="Remove pairing"
-                aria-label="Remove pairing"
-              ><X size={15} strokeWidth={2.25} /></button>
-            </div>
-          </div>
-
-          {#if showBox}
-            <div class="row qrbox">
-              <div class="qr" aria-label="Pairing QR">
-                {@html p.qrSvg}
-              </div>
-              <div class="col json-box" style="flex:1; min-width:0;">
-                <code class="json-pre">{p.payloadJson}</code>
-                <div class="row">
-                  <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
-                    Copy JSON
-                  </button>
-                  {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
-                </div>
-              </div>
-            </div>
-          {/if}
-        </div>
-      {:else}
-        <p class="muted tiny">No pairings yet. Create one above to start syncing.</p>
-      {/each}
-    </div>
-  </section>
-
-  <section class="group">
-    <h2>Sync with another desktop</h2>
-    <p class="hint">
-      On the <em>other</em> desktop, create a pairing above and copy its JSON.
-      Paste it here — this desktop connects out to it.
-    </p>
-    <div class="opt-list">
       <div class="field">
-        <span class="field-label">Peer pairing JSON</span>
+        <span class="field-label">Pairing JSON</span>
         <textarea
           class="peer-input"
-          placeholder={'{"v":1,"deviceId":"…","name":"…","host":"…","port":8765,"secret":"…"}'}
+          placeholder={'{"v":1,"deviceId":"...","name":"...","host":"...","port":8765,"secret":"..."}'}
           bind:value={peerJson}
           rows="3"
         ></textarea>
@@ -254,55 +180,112 @@
         {/if}
         <div class="row">
           <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>
-            {peerBusy ? "Adding…" : "Add desktop"}
+            {peerBusy ? "Adding..." : "Add"}
           </button>
         </div>
       </div>
     </div>
+  </section>
 
-    {#if $peers.length}
-      <div class="opt-list" style="margin-top:.75rem;">
+  <section class="group">
+    <h2>Devices</h2>
+    <div class="col list">
+      {#if $pairings.length || $peers.length}
+        {#each $pairings as p (p.pairing.id)}
+          {@const claimed = p.pairing.phoneId !== null}
+          {@const showBox = !claimed || revealed[p.pairing.id]}
+          <div class="panel pairing">
+            <div class="row" style="justify-content:space-between">
+              <div class="col">
+                <div class="row" style="gap:.45rem">
+                  <span
+                    class="dot"
+                    class:paired={claimed}
+                    title={claimed ? "Paired" : "Awaiting device"}
+                  ></span>
+                  <strong>{p.pairing.label}</strong>
+                </div>
+                <span class="muted tiny">
+                  Created {formatFullTime(p.pairing.createdAt)}
+                  {#if p.pairing.lastSeenAt} · last seen {formatFullTime(p.pairing.lastSeenAt)}{/if}
+                </span>
+              </div>
+              <div class="row" style="gap:.3rem">
+                {#if claimed}
+                  <button class="ghost" onclick={() => toggleReveal(p.pairing.id)}>
+                    {showBox ? "Hide" : "Show more"}
+                  </button>
+                {/if}
+                <button
+                  class="icon-btn"
+                  onclick={() => remove(p.pairing.id)}
+                  title="Remove pairing"
+                  aria-label="Remove pairing"
+                ><X size={15} strokeWidth={2.25} /></button>
+              </div>
+            </div>
+
+            {#if showBox}
+              <div class="row qrbox">
+                <div class="qr" aria-label="Pairing QR">
+                  {@html p.qrSvg}
+                </div>
+                <div class="col json-box" style="flex:1; min-width:0;">
+                  <code class="json-pre">{p.payloadJson}</code>
+                  <div class="row">
+                    <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
+                      Copy JSON
+                    </button>
+                    {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
+                  </div>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {/each}
+
         {#each $peers as p (p.id)}
           {@const online = $connectedPeers.has(p.id)}
-          <div class="peer">
+          <div class="panel peer-card">
             <div class="col" style="flex:1; min-width:0;">
-              <strong>{p.label}</strong>
+              <div class="row" style="gap:.45rem">
+                <span
+                  class="dot"
+                  class:paired={online}
+                  title={online ? "Connected" : "Offline"}
+                ></span>
+                <strong>{p.label}</strong>
+              </div>
               <span class="muted tiny">
                 {p.host}:{p.port}
                 {#if p.lastSeenAt} · last seen {formatFullTime(p.lastSeenAt)}{/if}
               </span>
             </div>
-            <span class="chip" class:active={online}>
-              {online ? "Connected" : "Offline"}
-            </span>
-            <button
-              class="icon-btn"
-              onclick={() => removePeer(p.id)}
-              title="Stop syncing with this desktop"
-              aria-label="Stop syncing with this desktop"
-            ><X size={15} strokeWidth={2.25} /></button>
+            <div class="row" style="gap:.3rem">
+              <span class="chip" class:active={online}>
+                {online ? "Connected" : "Offline"}
+              </span>
+              <button
+                class="icon-btn"
+                onclick={() => removePeer(p.id)}
+                title="Stop syncing with this desktop"
+                aria-label="Stop syncing with this desktop"
+              ><X size={15} strokeWidth={2.25} /></button>
+            </div>
           </div>
         {/each}
-      </div>
-    {:else}
-      <div class="muted tiny">No desktop peers yet.</div>
-    {/if}
+      {:else}
+        <p class="muted tiny">No devices yet.</p>
+      {/if}
+    </div>
   </section>
 
   <section class="group">
-    <h2>Recent pair attempts</h2>
-    <p class="hint">
-      Discovery-initiated pair requests hitting this desktop — accepted,
-      rejected, timed out, or blocked by the security gates (rate limit,
-      discoverability off, malformed handshake). Last 100 in memory; cleared
-      on restart.
-    </p>
-    <div class="row" style="gap:.5rem;">
+    <h2>Recent requests</h2>
+    <div class="row attempts-head">
       <button class="ghost" onclick={refreshPairAttempts}>Refresh</button>
     </div>
-    {#if pairAttempts.length === 0}
-      <p class="hint">No pair attempts yet.</p>
-    {:else}
+    {#if pairAttempts.length}
       <div class="attempts">
         {#each pairAttempts as a}
           <div class="attempt-row row">
@@ -326,9 +309,17 @@
 </div>
 
 <style>
+  /* Full-width divider separating the device settings above from the pairing
+     area (this component) below. */
+  .devices {
+    border-top: 1px solid var(--border);
+    padding-top: 1.25rem;
+  }
   .form { gap: .5rem; }
   .form input { flex: 1; }
-  .list { gap: .75rem; }
+  /* Cards run edge-to-edge, divided by the panel border-top (no gap). */
+  .list { gap: 0; }
+  .list > p { padding: .75rem var(--settings-pad); margin: 0; }
   .pairing { gap: .75rem; }
   /* Pairing status dot — amber while awaiting the device, green once paired. */
   .dot {
@@ -356,11 +347,11 @@
     line-height: 0;
   }
   .icon-btn:hover { background: var(--surface-hover); color: var(--danger); filter: none; }
-  /* --- Pair-attempts audit log --- */
+  /* --- Discovery request audit log --- */
+  .attempts-head { padding: 0 var(--settings-pad) .6rem; }
   .attempts {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     max-height: 260px;
     overflow-y: auto;
     scrollbar-width: thin;
@@ -368,10 +359,10 @@
   .attempt-row {
     align-items: center;
     gap: 0.5rem;
-    padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid var(--border);
+    padding: 0.5rem var(--settings-pad);
+    border-top: 1px solid var(--border);
   }
-  .attempt-row:last-child { border-bottom: none; }
+  .attempt-row:first-child { border-top: none; }
   .attempt-outcome {
     display: inline-flex;
     padding: 1px 8px;
@@ -444,13 +435,5 @@
     font-size: .78rem;
     resize: vertical;
   }
-  .peer {
-    display: flex;
-    align-items: center;
-    gap: .6rem;
-    padding: .6rem .8rem;
-    border-top: 1px solid var(--border);
-  }
-  .peer:first-child { border-top: none; }
   .err { color: var(--error, #b00); }
 </style>

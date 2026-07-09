@@ -27,11 +27,6 @@
 </script>
 
 <div class="pane col">
-  <header class="head">
-    <strong>Starred</strong>
-    <span class="muted tiny">All starred messages across every chat.</span>
-  </header>
-
   <div class="list scroll">
     {#if loading}
       <div class="muted center tiny">Loading…</div>
@@ -49,7 +44,6 @@
 
 <style>
   .pane { height: 100%; padding: .75rem; gap: .5rem; }
-  .head { display: flex; flex-direction: column; gap: .1rem; padding: 0 .1rem; }
   .list { flex: 1; min-height: 0; overflow-y: auto; padding-right: .25rem; }
   .hits { list-style: none; margin: 0; padding: 0; }
   .center { text-align: center; padding: 1.5rem .5rem; }

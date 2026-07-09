@@ -8,8 +8,7 @@ and quiet. When in doubt, match Acy (`e:\Github\Acy`) — the shared family iden
 - **Flat, not floating.** Separate things with **borders**, never shadows.
 - **Square, not round.** Rounded rectangles everywhere; circles/pills only for
   true indicators (status dots, toggle, progress).
-- **Grouped with hairlines.** Related rows live in one bordered container split by
-  thin dividers.
+- **Grouped with hairlines.** Related rows are grouped and split by thin dividers.
 - **Accent sparingly.** Colour = primary action or the active/selected state. Most
   surfaces are neutral.
 - **Quiet copy.** Short labels; one small hint per group, not a description per row.
@@ -54,13 +53,15 @@ theme-aware (light / `[data-theme='dark']`) and the accent is user-swappable
 
 ## Bordered lists (the core pattern)
 
-One border around a group of rows, `--border` hairline between rows, outer corners
-rounded, rows sit flush (no per-row radius or gap).
+Rows are grouped and separated by `--border` hairlines, flush (no per-row radius
+or gap).
 
-- `.opt-list` — settings (non-scrolling).
-- `.divided-list` — main screen (chat list, search / starred / reminders results);
-  scroll-friendly. Row buttons must be `border-radius: 0` so their fill doesn't
-  bulge past the dividers.
+- `.divided-list` — main screen (chat list, search / starred / reminders). A
+  bordered, rounded, scroll-friendly container; row buttons must be
+  `border-radius: 0` so their fill doesn't bulge past the dividers.
+- `.opt-list` — settings. Inside the settings panel the rows run **edge-to-edge**
+  with full-width dividers and no inner box (the panel frame is the only border);
+  content is inset by `--settings-pad`.
 - **Messages are the exception** — they stay as bubbles, not divided rows.
 
 ## Segmented controls
@@ -74,13 +75,19 @@ dividers between segments, active segment filled with accent.
 
 ## Settings
 
-- Left sub-nav (`.side` / `.side-link`, active = accent left-border) + `.panes`.
-- Sections are borderless `.group` blocks with an `<h2>`; a squared **accent back
-  button** sits by the "Settings" title.
-- Controls go inside `.opt-list`; toggles are `.opt-row` (label left, switch right);
-  text inputs are `.field` (label above input, `max-width ~360px`,
-  `--border-strong`); helper text is one `.hint` per group.
+- **One master-detail panel**: a bordered frame holding the category rail on the
+  left (`.side` / `.side-link`, right divider, active = accent left-bar + fill)
+  and the active category's content on the right (`.panes`).
+- Tabs: Devices & Sync · Appearance · Transcription · Backup · About.
+- Header: a squared **accent back button** by the "Settings" title, and a **Save**
+  button (save icon, top-right) that appears only when there are unsaved changes.
+- Content is edge-to-edge — sections are `.group` blocks (an `<h2>` + rows) split
+  by full-width dividers; controls sit in `.opt-list` (toggles are `.opt-row`,
+  label left / switch right); text inputs are `.field` (label above input,
+  `max-width ~360px`, `--border-strong`); helper text is one `.hint` per group.
 - No cards, anywhere.
+- About shows the version (`getVersion()`) + source link, and a changelog from
+  `lib/changelog.ts` (the section stays hidden until it has entries).
 
 ## Layout & navigation
 

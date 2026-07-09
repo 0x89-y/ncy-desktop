@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,106 @@ use crate::storage::{
 };
 use crate::sync::{author_event, SyncEvent};
 use crate::AppState;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopPrefs {
+    #[serde(rename = "startMinimized")]
+    pub start_minimized: bool,
+    #[serde(rename = "closeToTray")]
+    pub close_to_tray: bool,
+    #[serde(rename = "launchOnStartup")]
+    pub launch_on_startup: bool,
+    #[serde(rename = "askBeforeDeleting")]
+    pub ask_before_deleting: bool,
+}
+
+impl Default for DesktopPrefs {
+    fn default() -> Self {
+        Self {
+            start_minimized: false,
+            close_to_tray: true,
+            launch_on_startup: false,
+            ask_before_deleting: true,
+        }
+    }
+}
+
+pub fn desktop_prefs_path(settings_path: &std::path::Path) -> PathBuf {
+    settings_path.with_file_name("desktop_prefs.json")
+}
+
+pub fn load_desktop_prefs(settings_path: &std::path::Path) -> DesktopPrefs {
+    let path = desktop_prefs_path(settings_path);
+    let mut prefs = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<DesktopPrefs>(&s).ok())
+        .unwrap_or_default();
+    prefs.launch_on_startup = startup_enabled().unwrap_or(prefs.launch_on_startup);
+    prefs
+}
+
+fn save_desktop_prefs_file(settings_path: &std::path::Path, prefs: &DesktopPrefs) -> Result<(), String> {
+    let path = desktop_prefs_path(settings_path);
+    let bytes = serde_json::to_vec_pretty(prefs).map_err(|e| e.to_string())?;
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+
+#[cfg(windows)]
+fn startup_enabled() -> Result<bool, String> {
+    let output = std::process::Command::new("reg")
+        .args([
+            "query",
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "Ncy",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    Ok(output.status.success())
+}
+
+#[cfg(not(windows))]
+fn startup_enabled() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn set_startup_enabled(enabled: bool) -> Result<(), String> {
+    let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    let output = if enabled {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let value = format!("\"{}\"", exe.display());
+        std::process::Command::new("reg")
+            .args(["add", key, "/v", "Ncy", "/t", "REG_SZ", "/d", &value, "/f"])
+            .output()
+            .map_err(|e| e.to_string())?
+    } else {
+        std::process::Command::new("reg")
+            .args(["delete", key, "/v", "Ncy", "/f"])
+            .output()
+            .map_err(|e| e.to_string())?
+    };
+    if output.status.success() || !enabled {
+        Ok(())
+    } else {
+        let msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if msg.is_empty() {
+            "could not update Windows startup setting".into()
+        } else {
+            msg
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn set_startup_enabled(enabled: bool) -> Result<(), String> {
+    if enabled {
+        Err("launch on startup is only implemented on Windows right now".into())
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatSummary {
@@ -318,8 +419,8 @@ pub async fn pair_reject(
 }
 
 /// Recent pair-endpoint attempts (accepted, rejected, timed out, rate-limited,
-/// discovery-off, bad-pubkey). Backs the "Recent pair attempts" list in
-/// Settings so the user can spot unwanted activity. Newest last.
+/// discovery-off, bad-pubkey). Backs the "Recent requests" list in Settings →
+/// Sync so the user can spot unwanted activity. Newest last.
 #[tauri::command]
 pub async fn list_pair_attempts(
     state: State<'_, AppState>,
@@ -478,6 +579,22 @@ pub async fn update_settings(
     }
 
     Ok(settings)
+}
+
+#[tauri::command]
+pub async fn get_desktop_prefs(state: State<'_, AppState>) -> Result<DesktopPrefs, String> {
+    Ok(state.desktop_prefs.read().unwrap().clone())
+}
+
+#[tauri::command]
+pub async fn update_desktop_prefs(
+    state: State<'_, AppState>,
+    prefs: DesktopPrefs,
+) -> Result<DesktopPrefs, String> {
+    set_startup_enabled(prefs.launch_on_startup)?;
+    save_desktop_prefs_file(&state.paths.settings, &prefs)?;
+    *state.desktop_prefs.write().unwrap() = prefs.clone();
+    Ok(prefs)
 }
 
 #[tauri::command]

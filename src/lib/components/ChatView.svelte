@@ -430,7 +430,9 @@
     const c = $activeChat;
     if (!c) return;
     menuOpen = false;
+    const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
     if (
+      prefs.askBeforeDeleting &&
       !confirm(
         `Delete "${c.metadata.name}"? This removes it on every paired device and can't be undone.`,
       )

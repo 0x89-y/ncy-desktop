@@ -1,19 +1,45 @@
 <script lang="ts">
-  import { api, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
-  import { settings, refreshSettings, identity, refreshIdentity, refreshChats, settingsTab, activeView, type SettingsTab } from "../stores/app";
+  import { api, type AppSettings, type DesktopPrefs, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
+  import {
+    settings,
+    refreshSettings,
+    identity,
+    refreshIdentity,
+    refreshChats,
+    settingsTab,
+    activeView,
+    quickReactions,
+    messageDensity,
+    setQuickReactions,
+    REACTION_CHOICES,
+    DEFAULT_QUICK_REACTIONS,
+    type SettingsTab,
+  } from "../stores/app";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { Monitor, Sun, Moon, Mic, ArrowLeft } from "@lucide/svelte";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { CHANGELOG } from "../changelog";
+  import { Monitor, Sun, Moon, Mic, ArrowLeft, Save } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import DevicesPane from "../components/DevicesPane.svelte";
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: "general", label: "General" },
-    { id: "appearance", label: "Appearance" },
-    { id: "voice", label: "Transcription" },
-    { id: "devices", label: "Pairing" },
+    { id: "sync", label: "Sync" },
+    { id: "interface", label: "Interface" },
+    { id: "transcription", label: "Transcription" },
     { id: "backup", label: "Backup" },
+    { id: "about", label: "About" },
   ];
+
+  let appVersion = $state("");
+  onMount(async () => {
+    try {
+      appVersion = await getVersion();
+    } catch {
+      /* dev/browser fallback — leave blank */
+    }
+  });
 
   let port = $state(8765);
   let deviceName = $state("");
@@ -21,6 +47,13 @@
   let accent = $state("purple");
   let discoverable = $state(false);
   let transcriptionEnabled = $state(false);
+  let desktopPrefs = $state<DesktopPrefs>({
+    startMinimized: false,
+    closeToTray: true,
+    launchOnStartup: false,
+    askBeforeDeleting: true,
+  });
+  let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
   let dirty = $state(false);
 
@@ -50,6 +83,15 @@
     dirty = true;
   }
 
+  function settingsPayload(): AppSettings {
+    return { port, deviceName, theme, discoverable, accent, transcriptionEnabled };
+  }
+
+  async function persistSettings() {
+    await api.updateSettings(settingsPayload());
+    await refreshSettings();
+  }
+
   // Theme + accent both live-apply so the picker feels immediate. The Save
   // button still writes them to disk along with everything else dirty.
   async function applyThemeNow(value: "system" | "light" | "dark") {
@@ -57,8 +99,7 @@
     theme = value;
     markDirty();
     try {
-      await api.updateSettings({ port, deviceName, theme, discoverable, accent, transcriptionEnabled });
-      await refreshSettings();
+      await persistSettings();
       dirty = false;
     } catch {
       /* leave dirty so user can retry via Save */
@@ -69,8 +110,7 @@
     accent = value;
     markDirty();
     try {
-      await api.updateSettings({ port, deviceName, theme, discoverable, accent, transcriptionEnabled });
-      await refreshSettings();
+      await persistSettings();
       dirty = false;
     } catch {
       /* leave dirty so user can retry via Save */
@@ -96,8 +136,7 @@
     if (transcriptionEnabled === v) return;
     transcriptionEnabled = v;
     try {
-      await api.updateSettings({ port, deviceName, theme, discoverable, accent, transcriptionEnabled });
-      await refreshSettings();
+      await persistSettings();
     } catch {
       /* revert on failure */
       transcriptionEnabled = !v;
@@ -163,6 +202,14 @@
     transcriptionUnlisten?.();
   });
 
+  onMount(async () => {
+    try {
+      desktopPrefs = await api.getDesktopPrefs();
+    } catch (e: any) {
+      desktopPrefsError = typeof e === "string" ? e : (e?.message ?? "could not load desktop preferences");
+    }
+  });
+
   const themeModes: { value: "system" | "light" | "dark"; label: string; icon: any }[] = [
     { value: "system", label: "System", icon: Monitor },
     { value: "light", label: "Light", icon: Sun },
@@ -177,12 +224,36 @@
     { name: "teal", color: "#0d9488", label: "Teal" },
   ];
 
+  function toggleQuickReaction(emoji: string) {
+    if ($quickReactions.includes(emoji)) {
+      if ($quickReactions.length <= 1) return;
+      setQuickReactions($quickReactions.filter((x) => x !== emoji));
+    } else {
+      setQuickReactions([...$quickReactions, emoji]);
+    }
+  }
+
+  function resetQuickReactions() {
+    setQuickReactions(DEFAULT_QUICK_REACTIONS);
+  }
+
+  async function updateDesktopPref<K extends keyof DesktopPrefs>(key: K, value: DesktopPrefs[K]) {
+    const previous = desktopPrefs;
+    desktopPrefs = { ...desktopPrefs, [key]: value };
+    desktopPrefsError = null;
+    try {
+      desktopPrefs = await api.updateDesktopPrefs(desktopPrefs);
+    } catch (e: any) {
+      desktopPrefs = previous;
+      desktopPrefsError = typeof e === "string" ? e : (e?.message ?? "could not save desktop preference");
+    }
+  }
+
   async function save() {
     if (saving) return;
     saving = true;
     try {
-      await api.updateSettings({ port, deviceName, theme, discoverable, accent, transcriptionEnabled });
-      await refreshSettings();
+      await persistSettings();
       await refreshIdentity();
     } finally {
       saving = false;
@@ -257,6 +328,12 @@
       <ArrowLeft size={18} strokeWidth={2.5} />
     </button>
     <h1>Settings</h1>
+    {#if dirty || saving}
+      <button class="save-btn" onclick={save} disabled={saving} title="Save changes">
+        <Save size={16} strokeWidth={2.25} />
+        <span>{saving ? "Saving…" : "Save"}</span>
+      </button>
+    {/if}
   </div>
 
   <div class="settings-layout">
@@ -274,30 +351,85 @@
    <div class="panes">
   {#if $settingsTab === "general"}
   <section class="group">
-    <h2>This device</h2>
+    <h2>General</h2>
     <div class="opt-list">
-      {#if $identity}
-        <div class="opt-row">
-          <span class="opt-label">Device ID</span>
-          <code class="id">{$identity.deviceId}</code>
+      <label class="opt-row">
+        <span class="opt-label">Start minimized</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.startMinimized}
+            onchange={(e) => updateDesktopPref("startMinimized", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <label class="opt-row">
+        <span class="opt-label">Close to tray</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.closeToTray}
+            onchange={(e) => updateDesktopPref("closeToTray", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <label class="opt-row">
+        <span class="opt-label">Launch on startup</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.launchOnStartup}
+            onchange={(e) => updateDesktopPref("launchOnStartup", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      <label class="opt-row">
+        <span class="opt-label">Ask before deleting</span>
+        <span class="switch">
+          <input
+            type="checkbox"
+            checked={desktopPrefs.askBeforeDeleting}
+            onchange={(e) => updateDesktopPref("askBeforeDeleting", (e.currentTarget as HTMLInputElement).checked)}
+          />
+          <span class="slider"></span>
+        </span>
+      </label>
+      {#if desktopPrefsError}
+        <div class="field">
+          <span class="tiny" style="color:var(--danger);">{desktopPrefsError}</span>
         </div>
       {/if}
+    </div>
+  </section>
+  {:else if $settingsTab === "sync"}
+  <section class="group">
+    <h2>This device</h2>
+    <div class="opt-list">
       <label class="field">
-        <span class="field-label">Display name</span>
+        <span class="field-label">Device name</span>
         <input
           type="text"
           bind:value={deviceName}
           oninput={markDirty}
         />
       </label>
+      {#if $identity}
+        <div class="opt-row">
+          <span class="opt-label">Device ID</span>
+          <code class="id">{$identity.deviceId}</code>
+        </div>
+      {/if}
     </div>
   </section>
 
   <section class="group">
-    <h2>Network</h2>
+    <h2>Nearby discovery</h2>
     <div class="opt-list">
       <label class="field">
-        <span class="field-label">Port · restart to apply</span>
+        <span class="field-label">Sync port · restart to apply</span>
         <input
           type="number"
           min="1"
@@ -307,7 +439,10 @@
         />
       </label>
       <label class="opt-row">
-        <span class="opt-label">Discoverable</span>
+        <span class="opt-label">
+          Visible to nearby devices
+          <span class="inline-hint">QR and JSON still work when off.</span>
+        </span>
         <span class="switch">
           <input
             type="checkbox"
@@ -318,20 +453,12 @@
         </span>
       </label>
     </div>
-    <p class="hint">
-      Let nearby devices find this desktop to pair. QR / JSON pairing still
-      works when off.
-    </p>
   </section>
 
-  <div class="row actions">
-    <button onclick={save} disabled={!dirty || saving}>
-      {saving ? "Saving…" : "Save changes"}
-    </button>
-  </div>
-  {:else if $settingsTab === "appearance"}
+  <DevicesPane />
+  {:else if $settingsTab === "interface"}
   <section class="group">
-    <h2>Appearance</h2>
+    <h2>Interface</h2>
     <div class="opt-list">
       <div class="opt-row">
         <span class="opt-label">Theme</span>
@@ -366,15 +493,49 @@
           {/each}
         </div>
       </div>
+      <div class="opt-row reaction-row">
+        <span class="opt-label">Quick reactions</span>
+        <div class="reaction-settings">
+          <div class="reaction-choice-grid">
+            {#each REACTION_CHOICES as emoji (emoji)}
+              {@const selected = $quickReactions.includes(emoji)}
+              <button
+                type="button"
+                class="reaction-choice"
+                class:on={selected}
+                title={selected ? `Hide ${emoji}` : `Show ${emoji}`}
+                aria-label={selected ? `Hide ${emoji}` : `Show ${emoji}`}
+                onclick={() => toggleQuickReaction(emoji)}
+              >{emoji}</button>
+            {/each}
+          </div>
+          <button type="button" class="subtle reset-reactions" onclick={resetQuickReactions}>
+            Reset
+          </button>
+        </div>
+      </div>
+      <div class="opt-row">
+        <span class="opt-label">Message density</span>
+        <div class="seg">
+          <button
+            type="button"
+            class="seg-btn"
+            class:on={$messageDensity === "comfortable"}
+            onclick={() => messageDensity.set("comfortable")}
+          >Comfortable</button>
+          <button
+            type="button"
+            class="seg-btn"
+            class:on={$messageDensity === "compact"}
+            onclick={() => messageDensity.set("compact")}
+          >Compact</button>
+        </div>
+      </div>
     </div>
   </section>
-  {:else if $settingsTab === "voice"}
+  {:else if $settingsTab === "transcription"}
   <section class="group">
     <h2><Mic size={16} strokeWidth={2.25} /> Voice transcription</h2>
-    <p class="hint">
-      Transcribes voice messages locally with whisper.cpp — nothing leaves this
-      machine. Right-click a voice message to transcribe it manually.
-    </p>
     <div class="opt-list">
       <label class="opt-row">
         <span class="opt-label">Auto-transcribe voice messages</span>
@@ -460,24 +621,17 @@
       <span class="tiny" style="color:var(--danger);">{whisperError}</span>
     {/if}
   </section>
-  {:else if $settingsTab === "devices"}
-  <DevicesPane />
   {:else if $settingsTab === "backup"}
   <section class="group">
     <h2>Backup</h2>
-    <p class="hint">
-      Export every chat and its media to a single <code>.zip</code>. Import
-      merges safely — duplicates are ignored. Identity, pairings and settings
-      aren't included.
-    </p>
     <div class="opt-list">
       <div class="field">
-        <div class="row" style="gap:.5rem; flex-wrap:wrap;">
+        <div class="action-group">
           <button onclick={doExport} disabled={backupBusy}>
-            {backupBusy ? "Working…" : "Export backup…"}
+            {backupBusy ? "Working…" : "Export"}
           </button>
           <button onclick={doImport} disabled={backupBusy}>
-            {backupBusy ? "Working…" : "Import backup…"}
+            {backupBusy ? "Working…" : "Import"}
           </button>
         </div>
         {#if backupMsg}
@@ -486,6 +640,41 @@
       </div>
     </div>
   </section>
+  {:else if $settingsTab === "about"}
+  <section class="group">
+    <h2>About</h2>
+    <div class="opt-list">
+      <div class="opt-row">
+        <span class="opt-label">Ncy</span>
+        <span class="muted mono">v{appVersion || "…"}</span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-label">Source</span>
+        <a href="https://github.com/0x89-y" target="_blank" rel="noreferrer noopener">github.com/0x89-y</a>
+      </div>
+    </div>
+  </section>
+
+  {#if CHANGELOG.length}
+  <section class="group">
+    <h2>Changelog</h2>
+    <div class="changelog">
+      {#each CHANGELOG as rel (rel.version)}
+        <div class="rel">
+          <div class="rel-head">
+            <span class="mono rel-ver">v{rel.version}</span>
+            <span class="mono muted rel-date">{rel.date}</span>
+          </div>
+          <ul class="rel-list">
+            {#each rel.changes as c (c)}
+              <li>{c}</li>
+            {/each}
+          </ul>
+        </div>
+      {/each}
+    </div>
+  </section>
+  {/if}
   {/if}
    </div>
   </div>
@@ -509,10 +698,16 @@
   }
   h1 { margin: 0; font-size: 1.4rem; }
   .page-head {
+    position: sticky;
+    top: 0;
+    z-index: 6;
     display: flex;
     flex-direction: row;
     align-items: center;
     gap: .75rem;
+    margin: -1.5rem -1.5rem 0;
+    padding: 1.5rem 1.5rem .75rem;
+    background: var(--bg);
   }
   /* Round accent back button — the primary way out of settings. Background /
      hover color come from the global button default (accent + accent-hover). */
@@ -535,38 +730,93 @@
     border-radius: 6px;
     user-select: all;
   }
-  .actions { justify-content: flex-end; }
-
-  /* Sub-nav layout: sticky left rail of section links + a panes column.
-     Mirrors Acy's settings/+page.svelte. */
-  .settings-layout {
-    display: flex;
-    gap: 1.5rem;
-    align-items: flex-start;
+  /* Save action lives top-right in the header, appearing only when there are
+     unsaved changes. */
+  .save-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .4rem .7rem;
+    font-size: .88rem;
+    font-weight: 600;
+    line-height: 1;
   }
-  .side {
-    position: sticky;
-    top: 0;
-    flex: 0 0 150px;
+  /* Changelog — each release is a full-width block divided by a hairline, matching
+     the edge-to-edge settings rows. */
+  .changelog { display: flex; flex-direction: column; }
+  .rel {
+    padding: .85rem var(--settings-pad);
+    border-top: 1px solid var(--border);
+  }
+  .rel-head {
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+    margin-bottom: .45rem;
+  }
+  .rel-ver { font-weight: 600; }
+  .rel-date { font-size: .8rem; }
+  .rel-list {
+    margin: 0;
+    padding-left: 1.1rem;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: .3rem;
+  }
+  .rel-list li { font-size: .88rem; line-height: 1.45; }
+  .action-group {
+    display: inline-flex;
+    align-items: stretch;
+    width: fit-content;
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .action-group button {
+    border-radius: 0;
+  }
+  .action-group button + button {
+    border-left: 1px solid color-mix(in srgb, var(--accent-contrast) 30%, transparent);
+  }
+
+  /* Master-detail panel: one bordered frame holding the category rail (left,
+     with a divider) and the active category's content (right). */
+  .settings-layout {
+    display: flex;
+    align-items: stretch;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .side {
+    flex: 0 0 160px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    background: var(--surface-2);
   }
   .side-link {
     text-align: left;
-    padding: .5rem .7rem;
+    padding: .55rem .7rem;
     border: none;
+    border-top: 1px solid var(--border);
     border-left: 2px solid transparent;
     background: transparent;
     color: var(--text-muted);
-    border-radius: var(--radius-sm);
+    border-radius: 0;
     font-size: .92rem;
     font-weight: 500;
     cursor: pointer;
   }
+  .side-link:first-child { border-top: none; }
+  /* Close off the list with a divider under the last category, since the nav
+     column stretches taller than the links. */
+  .side-link:last-child { border-bottom: 1px solid var(--border); }
   .side-link:hover { background: var(--surface-hover); color: var(--text); filter: none; }
   .side-link.active {
-    background: var(--surface-2);
+    background: var(--surface);
     color: var(--text);
     border-left-color: var(--accent);
   }
@@ -575,7 +825,8 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0;
+    padding: 1.5rem 0;
   }
 
   /* Sliding switch, sized to sit on the right of an `.opt-row`. */
@@ -658,6 +909,61 @@
   .swatch.on {
     border-color: var(--text);
     transform: scale(1.08);
+  }
+  .reaction-row {
+    align-items: flex-start;
+  }
+  .reaction-settings {
+    display: flex;
+    align-items: flex-start;
+    gap: .5rem;
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .reaction-choice-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 2rem);
+    gap: 4px;
+  }
+  .reaction-choice {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1;
+  }
+  .reaction-choice:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+  .reaction-choice.on {
+    background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+    border-color: var(--accent);
+  }
+  .reset-reactions {
+    height: 2rem;
+    padding: 0 .7rem;
+    border-radius: var(--radius-sm);
+    font-size: .85rem;
+  }
+  @media (max-width: 720px) {
+    .reaction-row,
+    .reaction-settings {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .reaction-choice-grid {
+      grid-template-columns: repeat(auto-fill, minmax(2rem, 1fr));
+    }
+    .reset-reactions {
+      width: fit-content;
+    }
   }
   .progress {
     width: 100%;

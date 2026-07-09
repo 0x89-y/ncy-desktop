@@ -29,6 +29,45 @@ export function formatFullTime(ms: number | null | undefined): string {
   });
 }
 
+export function formatMessageTime(ms: number | null | undefined): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+
+  if (sameDay) {
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  }
+
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfMessageDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const dayDiff = Math.max(1, Math.floor((startOfToday - startOfMessageDay) / 86400000));
+
+  if (dayDiff === 1) return "Yesterday";
+  if (dayDiff < 7) return `${dayDiff} days ago`;
+
+  const weekDiff = Math.floor(dayDiff / 7);
+  if (dayDiff < 60) return weekDiff === 1 ? "1 week ago" : `${weekDiff} weeks ago`;
+
+  const monthDiff =
+    (now.getFullYear() - d.getFullYear()) * 12 +
+    now.getMonth() -
+    d.getMonth() -
+    (now.getDate() < d.getDate() ? 1 : 0);
+  if (monthDiff < 12) return monthDiff <= 1 ? "1 month ago" : `${monthDiff} months ago`;
+
+  const yearDiff = now.getFullYear() - d.getFullYear() - (
+    now.getMonth() < d.getMonth() ||
+    (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())
+      ? 1
+      : 0
+  );
+  return yearDiff <= 1 ? "1 year ago" : `${yearDiff} years ago`;
+}
+
 export function avatarInitials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "·";

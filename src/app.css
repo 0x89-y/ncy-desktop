@@ -242,41 +242,47 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
    `.group`s; controls sit inside bordered `.opt-list` row groups; free content
    uses `.panel`. Scoped under `.settings` so it also reaches the embedded
    DevicesPane (a child component) without touching the rest of the app. */
-.settings .group { margin: 0 0 1.75rem; }
-.settings .group:last-child { margin-bottom: 0; }
+/* Content is edge-to-edge inside the settings frame: sections stack, their rows
+   and dividers run the full width, and text/controls are inset with `--settings-pad`
+   so nothing is a box-in-a-box. */
+.settings { --settings-pad: 1.25rem; }
+.settings .group { margin: 0; }
+/* Full-width divider between adjacent sections, so section breaks read as lines
+   rather than plain whitespace. */
+.settings .group + .group {
+  border-top: 1px solid var(--border);
+  padding-top: 1.25rem;
+}
 .settings .group > h2 {
   display: flex;
   align-items: center;
   gap: .4rem;
-  margin: 0 0 .75rem;
+  margin: 0;
+  padding: 0 var(--settings-pad) .6rem;
   font-size: 1.05rem;
   font-weight: 600;
 }
 .settings .hint {
-  margin: -.15rem 0 .8rem;
-  max-width: 560px;
+  margin: 0;
+  padding: 0 var(--settings-pad) .7rem;
+  max-width: 620px;
   color: var(--text-muted);
   font-size: .82rem;
   line-height: 1.45;
 }
 .settings .field { display: flex; flex-direction: column; gap: .4rem; }
 .settings .field-label { font-size: .82rem; color: var(--text-muted); }
-/* Bordered container that separates each direct child with a thin divider —
-   the Appearance-style look, now used for every settings group. Children can be
-   `.opt-row`s (horizontal control rows) or `.field`s (label-above-input). */
+/* No inner box — each row (and the section header above it) is separated by a
+   full-width hairline; content is inset by `--settings-pad`. */
 .settings .opt-list {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
 }
 .settings .opt-list > * {
   margin: 0;
-  padding: .7rem .8rem;
+  padding: .75rem var(--settings-pad);
   border-top: 1px solid var(--border);
 }
-.settings .opt-list > :first-child { border-top: none; }
 .settings .opt-row {
   display: flex;
   align-items: center;
@@ -284,13 +290,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   gap: 1rem;
 }
 .settings .opt-label { min-width: 0; font-size: .9rem; font-weight: 500; }
+.settings .inline-hint {
+  display: block;
+  margin-top: .15rem;
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-weight: 400;
+}
 .settings .panel {
   display: flex;
   flex-direction: column;
   gap: .6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: .85rem;
+  padding: .85rem var(--settings-pad);
+  border-top: 1px solid var(--border);
 }
 /* Crisper, width-constrained inputs so short fields (name, port, label) don't
    stretch the full pane. Textareas keep their own full-width styling. */

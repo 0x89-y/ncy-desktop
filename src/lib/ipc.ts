@@ -139,6 +139,13 @@ export type AppSettings = {
   transcriptionEnabled: boolean;
 };
 
+export type DesktopPrefs = {
+  startMinimized: boolean;
+  closeToTray: boolean;
+  launchOnStartup: boolean;
+  askBeforeDeleting: boolean;
+};
+
 export type WhisperStatus = {
   cliPresent: boolean;
   modelPresent: boolean;
@@ -188,7 +195,7 @@ export type SyncEventPayload =
       safetyCode: string;
     };
 
-/** Row in the pair-attempts audit log (Settings → Recent pair attempts). */
+/** Row in the discovery request audit log (Settings → Device → Recent requests). */
 export type PairAttempt = {
   timestampMs: number;
   sourceIp: string;
@@ -216,6 +223,9 @@ export const api = {
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_settings", { settings }),
+  getDesktopPrefs: () => invoke<DesktopPrefs>("get_desktop_prefs"),
+  updateDesktopPrefs: (prefs: DesktopPrefs) =>
+    invoke<DesktopPrefs>("update_desktop_prefs", { prefs }),
   listLanIps: () => invoke<string[]>("list_lan_ips"),
   setAdvertisedHost: (host: string) =>
     invoke<void>("set_advertised_host", { host }),

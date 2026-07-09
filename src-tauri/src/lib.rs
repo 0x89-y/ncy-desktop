@@ -6,7 +6,7 @@ pub mod commands;
 // resolving unchanged.
 pub use ncy_core::{model, network, storage, sync};
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as StdRwLock};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -23,6 +23,7 @@ use crate::sync::{
     OutboundTx, PairSecurityState, PairingRegistry, PeerSyncDeps, ProtectionKeyStore,
     ServerContext, SyncEvent,
 };
+use commands::DesktopPrefs;
 
 /// Frontend-visible app state. Held by Tauri as a managed singleton.
 pub struct AppState {
@@ -59,6 +60,8 @@ pub struct AppState {
     /// Rate-limit state + audit log for pair attempts. Shared with the sync
     /// server; the command layer reads it for `list_pair_attempts`.
     pub pair_security: Arc<PairSecurityState>,
+    /// Desktop-only UI/runtime preferences (tray behavior, startup behavior).
+    pub desktop_prefs: Arc<StdRwLock<DesktopPrefs>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -86,14 +89,19 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        // Hide-to-tray on close: keeps the WebSocket server alive so the phone can
-        // keep syncing while the user has no visible window. Right-click the tray
-        // icon → Quit to actually exit.
+        // Hide-to-tray on close when enabled: keeps sync alive with no visible
+        // window. Right-click the tray icon → Quit always exits.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
+                    let close_to_tray = window
+                        .try_state::<AppState>()
+                        .and_then(|state| state.desktop_prefs.read().ok().map(|p| p.close_to_tray))
+                        .unwrap_or(true);
+                    if close_to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
                 }
             }
         })
@@ -108,6 +116,7 @@ pub fn run() {
             let paths = data_paths(data_root);
 
             let settings = storage::settings::load(&paths.settings).unwrap_or_default();
+            let desktop_prefs = commands::load_desktop_prefs(&paths.settings);
             let identity = DesktopIdentity::load_or_create(&paths.identity, &settings.device_name)?;
             let pairings = load_pairings(&paths.pairings).unwrap_or_default();
             let peers = Arc::new(RwLock::new(load_peers(&paths.peers).unwrap_or_default()));
@@ -178,6 +187,7 @@ pub fn run() {
                 peer_notify: peer_notify.clone(),
                 pairing_registry: pairing_registry.clone(),
                 pair_security: pair_security.clone(),
+                desktop_prefs: Arc::new(StdRwLock::new(desktop_prefs.clone())),
             };
 
             let port = settings.port;
@@ -278,6 +288,12 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            if desktop_prefs.start_minimized {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.hide();
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -291,6 +307,8 @@ pub fn run() {
             commands::delete_peer,
             commands::get_settings,
             commands::update_settings,
+            commands::get_desktop_prefs,
+            commands::update_desktop_prefs,
             commands::list_lan_ips,
             commands::set_advertised_host,
             commands::get_advertised_host,

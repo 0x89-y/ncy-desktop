@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { activeChatId, visibleChats, selectChat, showArchived, allTags, activeTag, profileBuckets, activeProfileId, refreshChats, refreshActiveChat } from "../stores/app";
+  import { activeChatId, visibleChats, selectChat, allTags, activeTag, profileBuckets, activeProfileId, refreshChats, refreshActiveChat } from "../stores/app";
   import { api, type ChatSummary } from "../ipc";
   import ChatListItem from "./ChatListItem.svelte";
-  import { Plus, Archive } from "@lucide/svelte";
+  import { Plus } from "@lucide/svelte";
 
   function setTag(t: string | null) {
     activeTag.set(t);
@@ -109,7 +109,8 @@
     if (!ctx) return;
     const c = ctx.chat;
     closeCtx();
-    if (
+    const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
+    if (prefs.askBeforeDeleting &&
       !confirm(
         `Delete "${c.name}"? This removes it on every paired device and can't be undone.`,
       )
@@ -200,8 +201,8 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="wrap col">
-  <div class="row profiles">
-    {#if $profileBuckets.length > 1}
+  {#if $profileBuckets.length > 1}
+    <div class="row profiles">
       <div class="chip-seg">
         <button
           class="chip-seg-btn"
@@ -217,15 +218,8 @@
           >{p.name}</button>
         {/each}
       </div>
-    {/if}
-    <button
-      class="archive-btn"
-      class:active={$showArchived}
-      onclick={() => showArchived.update((v) => !v)}
-      title={$showArchived ? "Hide archived chats" : "Show archived chats"}
-      aria-label="Toggle archived chats"
-    ><Archive size={15} strokeWidth={2.25} /></button>
-  </div>
+    </div>
+  {/if}
 
   {#if creating}
     <div class="row create">
@@ -375,8 +369,8 @@
   .wrap {
     position: relative;
     height: 100%;
-    padding: .75rem;
-    gap: .5rem;
+    padding: 0;
+    gap: 0;
   }
   /* Floating "New chat" action — sits in the bottom-right corner of the list
      pane so it never consumes a row. Anchored to `.wrap` (which doesn't scroll;
@@ -468,43 +462,21 @@
     cursor: pointer;
   }
   .tags {
-    padding: 0 .25rem .25rem;
-  }
-  /* Icon-only "show archived" toggle, sitting at the right of the profiles row. */
-  .archive-btn {
-    margin-left: auto;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    line-height: 0;
-  }
-  .archive-btn:hover:not(.active) { background: var(--surface-hover); color: var(--text); }
-  .archive-btn.active {
-    background: var(--accent);
-    color: var(--accent-contrast);
-    border-color: var(--accent);
+    padding: .5rem;
+    border-bottom: 1px solid var(--border);
   }
   .profiles {
     gap: .25rem;
-    padding: 0 .25rem .25rem;
-    border-bottom: 1px solid var(--outline-variant);
-    margin-bottom: .25rem;
+    padding: .5rem;
+    border-bottom: 1px solid var(--border);
   }
   /* Connected segmented control for the profile buckets. */
   .chip-seg {
     display: inline-flex;
     align-items: stretch;
     max-width: 100%;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     overflow: hidden;
   }
   .chip-seg-btn {
@@ -524,14 +496,14 @@
   .chip-seg-btn + .chip-seg-btn { border-left: 1px solid var(--border-strong); }
   .chip-seg-btn:hover:not(.active) { background: var(--surface-hover); color: var(--text); }
   .chip-seg-btn.active { background: var(--accent); color: var(--accent-contrast); }
-  /* `.divided-list` (global) supplies the border, radius and row dividers;
-     keep the flex fill and re-enable vertical scroll (the global rule clips
-     overflow to round the corners). */
+  /* The outer ChatListPane supplies the frame; keep only the row dividers here. */
   .list {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    border: none;
+    border-radius: 0;
   }
   .empty {
     padding: 2rem 1rem;
