@@ -11,6 +11,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.4.3",
+    date: "2026-07-09",
+    changes: [
+      "Click an image in a chat to open it full-size. Zoom with the scroll wheel, drag to move around, and use the arrow keys to step through every image in that chat.",
+      "Copy an image straight to the clipboard, ready to paste anywhere, or save it to disk with the right file type.",
+      "Fixed a black command window flashing over the app when opening Settings or changing a setting.",
+    ],
+  },
+  {
     version: "0.4.2",
     date: "2026-07-09",
     changes: [
