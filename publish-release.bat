@@ -53,6 +53,10 @@ copy /y "%SETUP%" "release\Ncy-windows-x64-setup.exe" >nul
 
 rem ---- Write latest.json with the signature inlined --------------------------
 rem The signature file is a base64 blob; read it raw so no newline sneaks in.
+rem Write with WriteAllText + UTF8Encoding($false), NOT `Set-Content -Encoding utf8`:
+rem Windows PowerShell 5.1 emits a UTF-8 BOM, and the Tauri updater parses the
+rem manifest with serde_json, which rejects a leading BOM. The client surfaces
+rem that as the useless "error decoding response body".
 powershell -NoProfile -Command ^
   "$sig = (Get-Content -Raw '%SIG%').Trim();" ^
   "$manifest = [ordered]@{" ^
@@ -61,7 +65,9 @@ powershell -NoProfile -Command ^
   "  pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ');" ^
   "  platforms = [ordered]@{ 'windows-x86_64' = [ordered]@{ signature = $sig; url = 'https://0x89-y.xyz/ncy/Ncy-windows-x64-setup.exe' } }" ^
   "};" ^
-  "$manifest | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 'release\latest.json'"
+  "$json = $manifest | ConvertTo-Json -Depth 5;" ^
+  "$out = Join-Path (Get-Location).Path 'release\latest.json';" ^
+  "[System.IO.File]::WriteAllText($out, $json, (New-Object System.Text.UTF8Encoding $false))"
 
 if not "%ERRORLEVEL%"=="0" (
     echo.
