@@ -15,6 +15,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.5.0",
+    date: "2026-07-10",
+    changes: [
+      "Added replies to messages.",
+      "Redesigned voice messages with a compact player, waveform, seeking, and duration.",
+      "Added a compact chat-list setting that hides message previews.",
+      "New app icon.",
+      "Reorganised sync and backup settings.",
+      "Fixed the missing divider below the last chat.",
+    ],
+  },
+  {
     version: "0.4.3",
     date: "2026-07-09",
     changes: [

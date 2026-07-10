@@ -11,16 +11,25 @@
     advertisedHost,
     refreshLanIps,
     serverAddr,
-    serverStatus,
   } from "../stores/app";
   import { formatFullTime } from "../format";
   import { X } from "@lucide/svelte";
   import { onMount } from "svelte";
 
+  let {
+    discoverable,
+    onDiscoverableChange,
+  }: {
+    discoverable: boolean;
+    onDiscoverableChange: (value: boolean) => void;
+  } = $props();
+
   let label = $state("");
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
-  let showSyncAddress = $state(false);
+  let showConnectionDetails = $state(false);
+  let showManualPairing = $state(false);
+  let showRecentRequests = $state(false);
   // Per-pairing "Show pairing info" toggle. Claimed pairings hide the QR + JSON
   // by default (they're only needed for the first pairing handshake); the user
   // can reveal them here if they need to re-pair a lost phone from scratch.
@@ -126,71 +135,86 @@
 
 <div class="devices">
   <section class="group">
-    <h2>Add device</h2>
+    <h2>Pairing</h2>
     <div class="opt-list">
-      <div class="opt-row">
-        <span class="opt-label">Status</span>
-        <div class="row" style="gap:.5rem; align-items:center;">
-          <span class="muted tiny">{$serverStatus}</span>
-          <button class="ghost" onclick={() => (showSyncAddress = !showSyncAddress)}>
-            {showSyncAddress ? "Hide address" : "Show address"}
-          </button>
-        </div>
-      </div>
-      {#if showSyncAddress}
-        <div class="field">
-          <span class="field-label">Sync address</span>
-          {#if $serverAddr}
-            <span class="muted tiny">{$serverAddr}</span>
-          {/if}
-          <div class="row" style="flex-wrap:wrap;gap:.4rem">
-            {#each $lanIps as ip (ip)}
-              <button
-                class="chip"
-                class:active={$advertisedHost === ip}
-                onclick={() => pickHost(ip)}
-              >{ip}</button>
-            {/each}
-            <button class="ghost" onclick={refreshIps}>Refresh IPs</button>
-          </div>
-        </div>
-      {/if}
       <div class="field">
-        <span class="field-label">Create QR code</span>
+        <span class="field-label">Pairing label</span>
         <div class="row form">
           <input
             type="text"
-            placeholder="Label"
+            placeholder="Phone"
             bind:value={label}
             onkeydown={(e) => e.key === "Enter" && create()}
           />
-          <button onclick={create} disabled={busy}>Create</button>
-        </div>
-      </div>
-      <div class="field">
-        <span class="field-label">Pairing JSON</span>
-        <textarea
-          class="peer-input"
-          placeholder={'{"v":1,"deviceId":"...","name":"...","host":"...","port":8765,"secret":"..."}'}
-          bind:value={peerJson}
-          rows="3"
-        ></textarea>
-        {#if peerError}
-          <div class="tiny err">{peerError}</div>
-        {/if}
-        <div class="row">
-          <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>
-            {peerBusy ? "Adding..." : "Add"}
+          <button onclick={create} disabled={busy}>{busy ? "Creating..." : "Create code"}</button>
+          <button type="button" class="ghost" onclick={() => (showManualPairing = !showManualPairing)}>
+            {showManualPairing ? "Hide manual" : "Manual"}
+          </button>
+          <button type="button" class="ghost" onclick={() => (showConnectionDetails = !showConnectionDetails)}>
+            {showConnectionDetails ? "Hide network" : "Network"}
           </button>
         </div>
+        {#if showManualPairing}
+          <div class="manual-pairing">
+            <textarea
+              class="peer-input"
+              placeholder={'{"v":1,"deviceId":"...","name":"...","host":"...","port":8765,"secret":"..."}'}
+              bind:value={peerJson}
+              rows="3"
+              aria-label="Pairing JSON"
+            ></textarea>
+            {#if peerError}
+              <div class="tiny err">{peerError}</div>
+            {/if}
+            <div class="row">
+              <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>
+                {peerBusy ? "Adding..." : "Add desktop"}
+              </button>
+            </div>
+          </div>
+        {/if}
+        {#if showConnectionDetails}
+          <div class="network-details">
+            <label class="opt-row embedded-row">
+              <span class="opt-label">
+                Discoverable on local network
+                <span class="inline-hint">QR and JSON still work when off.</span>
+              </span>
+              <span class="switch">
+                <input
+                  type="checkbox"
+                  checked={discoverable}
+                  onchange={(e) => onDiscoverableChange((e.currentTarget as HTMLInputElement).checked)}
+                />
+                <span class="slider"></span>
+              </span>
+            </label>
+            <div class="field">
+              <span class="field-label">Sync address</span>
+              {#if $serverAddr}
+                <span class="muted tiny">{$serverAddr}</span>
+              {/if}
+              <div class="row ip-row">
+                {#each $lanIps as ip (ip)}
+                  <button
+                    class="chip"
+                    class:active={$advertisedHost === ip}
+                    onclick={() => pickHost(ip)}
+                  >{ip}</button>
+                {/each}
+                <button class="ghost" onclick={refreshIps}>Refresh IPs</button>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   </section>
 
+  {#if $pairings.length || $peers.length}
   <section class="group">
-    <h2>Devices</h2>
+    <h2>Paired devices</h2>
     <div class="col list">
-      {#if $pairings.length || $peers.length}
         {#each $pairings as p (p.pairing.id)}
           {@const claimed = p.pairing.phoneId !== null}
           {@const showBox = !claimed || revealed[p.pairing.id]}
@@ -274,18 +298,30 @@
             </div>
           </div>
         {/each}
-      {:else}
-        <p class="muted tiny">No devices yet.</p>
-      {/if}
     </div>
   </section>
+  {:else}
+    <p class="muted tiny inline-empty">Create a pairing code to add your first device.</p>
+  {/if}
 
+  {#if pairAttempts.length}
   <section class="group">
     <h2>Recent requests</h2>
-    <div class="row attempts-head">
-      <button class="ghost" onclick={refreshPairAttempts}>Refresh</button>
+    <div class="opt-list">
+      <div class="opt-row">
+        <span class="opt-label">
+          Pairing request history
+          <span class="inline-hint">Accepted, rejected, and timed-out requests.</span>
+        </span>
+        <button type="button" class="subtle compact-btn" onclick={() => (showRecentRequests = !showRecentRequests)}>
+          {showRecentRequests ? "Hide" : "Show"}
+        </button>
+      </div>
     </div>
-    {#if pairAttempts.length}
+    {#if showRecentRequests}
+      <div class="row attempts-head">
+        <button class="ghost" onclick={refreshPairAttempts}>Refresh</button>
+      </div>
       <div class="attempts">
         {#each pairAttempts as a}
           <div class="attempt-row row">
@@ -306,6 +342,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 </div>
 
 <style>
@@ -317,9 +354,70 @@
   }
   .form { gap: .5rem; }
   .form input { flex: 1; }
+  .form .ghost {
+    flex-shrink: 0;
+  }
+  .manual-pairing,
+  .network-details {
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    margin-top: .5rem;
+  }
+  .network-details {
+    padding-top: .5rem;
+    border-top: 1px solid var(--border);
+  }
+  .embedded-row {
+    padding: 0;
+    border-top: none;
+  }
+  .compact-btn {
+    padding: .42rem .7rem;
+    min-width: 4.75rem;
+    flex-shrink: 0;
+    font-size: .85rem;
+  }
+  .ip-row {
+    flex-wrap: wrap;
+    gap: .4rem;
+  }
+  .switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+    flex-shrink: 0;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    background: var(--border-strong);
+    border-radius: var(--radius-pill);
+    transition: background .15s;
+  }
+  .slider::before {
+    content: "";
+    position: absolute;
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform .15s;
+  }
+  .switch input:checked + .slider { background: var(--accent); }
+  .switch input:checked + .slider::before { transform: translateX(18px); }
+  .inline-empty {
+    margin: 0;
+    padding: .75rem var(--settings-pad);
+    border-top: 1px solid var(--border);
+  }
   /* Cards run edge-to-edge, divided by the panel border-top (no gap). */
   .list { gap: 0; }
-  .list > p { padding: .75rem var(--settings-pad); margin: 0; }
   .pairing { gap: .75rem; }
   /* Pairing status dot — amber while awaiting the device, green once paired. */
   .dot {

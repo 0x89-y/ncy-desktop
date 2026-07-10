@@ -9,7 +9,8 @@
     unmarkTranscribing,
     setTranscriptionError,
   } from "../stores/app";
-  import { api, extractMediaHash } from "../ipc";
+  import { api, extractMediaHash, type Message } from "../ipc";
+  import { messagePreview, replyPreviewText } from "../format";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
@@ -55,6 +56,40 @@
       .catch(() => {});
   });
 
+  // The message the next send will quote. Cleared as soon as a send starts, so a
+  // reply attaches to exactly one outgoing message.
+  let replyTarget = $state<Message | null>(null);
+  let highlightedId = $state<string | null>(null);
+  let highlightTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const messageIds = $derived(new Set(($activeChat?.messages ?? []).map((m) => m.id)));
+
+  function startReply(m: Message) {
+    replyTarget = m;
+    composeTextarea?.focus();
+  }
+  function cancelReply() {
+    replyTarget = null;
+  }
+  function consumeReplyId(): string | null {
+    const id = replyTarget?.id ?? null;
+    replyTarget = null;
+    return id;
+  }
+
+  /** Scroll a quoted original into view and flash it. No-op if it was deleted. */
+  function jumpToMessage(id: string) {
+    const el = scroller?.querySelector(`[data-mid="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (highlightTimer) clearTimeout(highlightTimer);
+    highlightedId = id;
+    highlightTimer = setTimeout(() => {
+      highlightedId = null;
+      highlightTimer = null;
+    }, 1400);
+  }
+
   async function sendChecklist() {
     const c = $activeChat;
     if (!c || sending) return;
@@ -69,7 +104,7 @@
     sending = true;
     sendError = null;
     try {
-      await api.authorSendChecklist(c.metadata.id, items);
+      await api.authorSendChecklist(c.metadata.id, items, consumeReplyId());
       checklistText = "";
       checklistOpen = false;
     } catch (e: any) {
@@ -100,7 +135,7 @@
     sending = true;
     sendError = null;
     try {
-      await api.authorSendMessage(c.metadata.id, blocks);
+      await api.authorSendMessage(c.metadata.id, blocks, consumeReplyId());
       composeText = "";
     } catch (e: any) {
       sendError = typeof e === "string" ? e : (e?.message ?? "send failed");
@@ -253,10 +288,26 @@
     if (e.key === "Escape" && composeMenu) {
       e.preventDefault();
       closeComposeMenu();
+      return;
+    }
+    // Ctrl/Cmd+Shift+R — reply to the newest message in the open chat.
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "r" || e.key === "R")) {
+      const msgs = $activeChat?.messages ?? [];
+      const last = msgs[msgs.length - 1];
+      if (last) {
+        e.preventDefault();
+        startReply(last);
+      }
     }
   }
 
   function onKeyDown(e: KeyboardEvent) {
+    // Escape backs out of a pending reply before anything else claims the key.
+    if (e.key === "Escape" && replyTarget) {
+      e.preventDefault();
+      cancelReply();
+      return;
+    }
     // Ctrl/Cmd-B / -I — standard formatting shortcuts.
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === "b" || e.key === "B")) {
@@ -573,7 +624,7 @@
         let bin = "";
         for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
         const b64 = btoa(bin);
-        const messageId = await api.authorSendVoice(c.metadata.id, b64, duration);
+        const messageId = await api.authorSendVoice(c.metadata.id, b64, duration, consumeReplyId());
         // Auto-transcribe: fire-and-forget so the send returns quickly while
         // whisper grinds in the background. MessageBubble reads the
         // `transcribing` store to show the spinner.
@@ -642,7 +693,7 @@
     sending = true;
     sendError = null;
     try {
-      await api.authorSendImage(c.metadata.id, path);
+      await api.authorSendImage(c.metadata.id, path, consumeReplyId());
     } catch (e: any) {
       sendError = typeof e === "string" ? e : (e?.message ?? "image send failed");
     } finally {
@@ -821,6 +872,10 @@
           message={m}
           bubbleColor={chat.metadata.bubbleColor}
           bubbleGradient={chat.metadata.bubbleGradient}
+          onReply={startReply}
+          onJumpToReplyTarget={jumpToMessage}
+          replyTargetExists={!!m.replyToId && messageIds.has(m.replyToId)}
+          highlighted={m.id === highlightedId}
         />
       {:else}
         <div class="empty muted">No messages yet.</div>
@@ -828,6 +883,21 @@
     </div>
 
     <footer class="compose">
+      {#if replyTarget}
+        <!-- Reads the live target, not a snapshot: the snapshot is frozen only when
+             the reply is actually sent, so edits made while this bar is open show. -->
+        <div class="reply-bar">
+          <div class="reply-bar-body">
+            <span class="reply-bar-label tiny">Replying to</span>
+            <span class="reply-bar-text tiny">
+              {replyPreviewText(messagePreview(replyTarget), replyTarget.type)}
+            </span>
+          </div>
+          <button type="button" class="text-btn" onclick={cancelReply} aria-label="Cancel reply">
+            Cancel
+          </button>
+        </div>
+      {/if}
       {#if sendError}
         <div class="compose-error tiny">{sendError}</div>
       {/if}
@@ -1177,6 +1247,32 @@
   }
   .compose-error {
     color: var(--error, #b00);
+  }
+  .reply-bar {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .35rem .5rem;
+    margin-bottom: .35rem;
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .reply-bar-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .reply-bar-label {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .reply-bar-text {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .checklist-composer {
     display: flex;

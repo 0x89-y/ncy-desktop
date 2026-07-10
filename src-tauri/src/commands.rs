@@ -911,11 +911,38 @@ pub async fn change_chat_pin(
     Ok(())
 }
 
+/// Freeze a reply quote onto an outgoing message. The snapshot is taken here in the
+/// backend rather than passed in by the UI: only this side can read the target inside
+/// an unlocked protected chat, and only this side is authoritative about what the
+/// target actually said.
+fn attach_reply(
+    state: &AppState,
+    chat_id: &str,
+    msg: Message,
+    reply_to_id: Option<String>,
+) -> Message {
+    let target_id = match reply_to_id.filter(|s| !s.trim().is_empty()) {
+        Some(id) => id,
+        None => return msg,
+    };
+    let key = state.keystore.key_for(chat_id);
+    match current_message(&state.events, chat_id, &target_id, key.as_ref()) {
+        Ok(target) => msg.replying_to(&target),
+        // Target deleted between opening the reply bar and sending. Keep the pointer
+        // — it is still true — but there is no longer any text to freeze.
+        Err(_) => Message {
+            reply_to_id: Some(target_id),
+            ..msg
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn author_send_text(
     state: State<'_, AppState>,
     chat_id: String,
     text: String,
+    reply_to_id: Option<String>,
 ) -> Result<(), String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -949,7 +976,12 @@ pub async fn author_send_text(
         checklist_items: vec![],
         reactions: vec![],
         transcript: None,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
     };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
@@ -1073,6 +1105,7 @@ pub async fn author_send_checklist(
     state: State<'_, AppState>,
     chat_id: String,
     items: Vec<String>,
+    reply_to_id: Option<String>,
 ) -> Result<(), String> {
     let cleaned: Vec<crate::model::ChecklistItem> = items
         .into_iter()
@@ -1108,7 +1141,12 @@ pub async fn author_send_checklist(
         checklist_items: cleaned,
         reactions: vec![],
         transcript: None,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
     };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
@@ -1395,6 +1433,7 @@ pub async fn author_send_message(
     state: State<'_, AppState>,
     chat_id: String,
     content: Vec<RichTextBlock>,
+    reply_to_id: Option<String>,
 ) -> Result<(), String> {
     // Reject if the entire payload would render as empty text — same guard as
     // author_send_text but applied to the assembled rich content.
@@ -1421,7 +1460,12 @@ pub async fn author_send_message(
         checklist_items: vec![],
         reactions: vec![],
         transcript: None,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
     };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 
@@ -1435,6 +1479,7 @@ pub async fn author_send_voice(
     chat_id: String,
     bytes_b64: String,
     duration_ms: Option<i64>,
+    reply_to_id: Option<String>,
 ) -> Result<String, String> {
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
     let bytes = B64
@@ -1466,7 +1511,12 @@ pub async fn author_send_voice(
         checklist_items: vec![],
         reactions: vec![],
         transcript: None,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
     };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     let id = msg.id.clone();
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)?;
     // Return the id so the frontend can kick off `author_transcribe_voice`
@@ -1484,6 +1534,7 @@ pub async fn author_send_image(
     state: State<'_, AppState>,
     chat_id: String,
     source_path: String,
+    reply_to_id: Option<String>,
 ) -> Result<(), String> {
     let bytes = std::fs::read(&source_path)
         .map_err(|e| format!("read source: {e}"))?;
@@ -1519,6 +1570,10 @@ pub async fn author_send_image(
         edited_at: None,
         message_type: MessageType::Image,
         is_starred: false,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
         image_files: vec![],
         tags: vec![],
         reminder_at: None,
@@ -1526,6 +1581,7 @@ pub async fn author_send_image(
         reactions: vec![],
         transcript: None,
     };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
 }
 

@@ -68,6 +68,17 @@ export type Message = {
   reactions: string[];
   /** Whisper transcript for voice messages (null until transcription runs). */
   transcript: string | null;
+  /** Id of the message this one replies to, always within the same chat. */
+  replyToId: string | null;
+  /**
+   * Preview of the replied-to message, frozen when the reply was authored. A
+   * tombstone hard-removes its target from the materialized view, so a bare
+   * replyToId would dangle; this snapshot keeps the quote renderable after the
+   * original is deleted. Empty for types with no text — the UI supplies a label.
+   */
+  replyToPreview: string | null;
+  replyToType: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | null;
+  replyToCreatedAt: number | null;
 };
 
 export type ChatMetadata = {
@@ -253,8 +264,8 @@ export const api = {
     listen<SyncEventPayload>("sync-event", (e) => cb(e.payload)),
 
   // Phase 2a.2 authoring — desktop generates events that flow back to the phone.
-  authorSendText: (chatId: string, text: string) =>
-    invoke<void>("author_send_text", { chatId, text }),
+  authorSendText: (chatId: string, text: string, replyToId: string | null = null) =>
+    invoke<void>("author_send_text", { chatId, text, replyToId }),
   authorToggleStar: (chatId: string, messageId: string) =>
     invoke<void>("author_toggle_star", { chatId, messageId }),
   authorToggleReaction: (chatId: string, messageId: string, emoji: string) =>
@@ -263,14 +274,18 @@ export const api = {
     invoke<void>("author_edit_text", { chatId, messageId, text }),
   authorDeleteMessage: (chatId: string, messageId: string) =>
     invoke<void>("author_delete_message", { chatId, messageId }),
-  authorSendImage: (chatId: string, sourcePath: string) =>
-    invoke<void>("author_send_image", { chatId, sourcePath }),
-  authorSendVoice: (chatId: string, bytesB64: string, durationMs: number | null) =>
-    invoke<string>("author_send_voice", { chatId, bytesB64, durationMs }),
+  authorSendImage: (chatId: string, sourcePath: string, replyToId: string | null = null) =>
+    invoke<void>("author_send_image", { chatId, sourcePath, replyToId }),
+  authorSendVoice: (
+    chatId: string,
+    bytesB64: string,
+    durationMs: number | null,
+    replyToId: string | null = null,
+  ) => invoke<string>("author_send_voice", { chatId, bytesB64, durationMs, replyToId }),
   authorTranscribeVoice: (chatId: string, messageId: string) =>
     invoke<void>("author_transcribe_voice", { chatId, messageId }),
-  authorSendChecklist: (chatId: string, items: string[]) =>
-    invoke<void>("author_send_checklist", { chatId, items }),
+  authorSendChecklist: (chatId: string, items: string[], replyToId: string | null = null) =>
+    invoke<void>("author_send_checklist", { chatId, items, replyToId }),
   authorSetReminder: (chatId: string, messageId: string, reminderAt: number | null) =>
     invoke<void>("author_set_reminder", { chatId, messageId, reminderAt }),
   authorSetChatAvatar: (chatId: string, sourcePath: string) =>
@@ -298,8 +313,11 @@ export const api = {
     invoke<string>("author_create_chat", { name }),
   authorDeleteChat: (chatId: string) =>
     invoke<void>("author_delete_chat", { chatId }),
-  authorSendMessage: (chatId: string, content: RichTextBlock[]) =>
-    invoke<void>("author_send_message", { chatId, content }),
+  authorSendMessage: (
+    chatId: string,
+    content: RichTextBlock[],
+    replyToId: string | null = null,
+  ) => invoke<void>("author_send_message", { chatId, content, replyToId }),
 
   // Phase 2b — content-addressed media blobs.
   readBlob: (hash: string, mediaType: MediaType) =>

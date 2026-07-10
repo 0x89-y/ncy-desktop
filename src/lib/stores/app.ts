@@ -154,6 +154,22 @@ messageDensity.subscribe((v) => {
   }
 });
 
+export type ChatListDensity = "comfortable" | "compact";
+const CHAT_LIST_DENSITY_KEY = "ncy:chat-list-density";
+function normalizeChatListDensity(value: string | null): ChatListDensity {
+  return value === "compact" ? "compact" : "comfortable";
+}
+const initialChatListDensity =
+  typeof localStorage !== "undefined"
+    ? normalizeChatListDensity(localStorage.getItem(CHAT_LIST_DENSITY_KEY))
+    : "comfortable";
+export const chatListDensity = writable<ChatListDensity>(initialChatListDensity);
+chatListDensity.subscribe((v) => {
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(CHAT_LIST_DENSITY_KEY, normalizeChatListDensity(v));
+  }
+});
+
 /** Active section within the settings view. Persisted per-device so reopening
  *  Settings lands on the last-used section. */
 export type SettingsTab = "general" | "sync" | "interface" | "transcription" | "backup" | "about";

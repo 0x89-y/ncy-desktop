@@ -10,6 +10,7 @@
     activeView,
     quickReactions,
     messageDensity,
+    chatListDensity,
     setQuickReactions,
     serverStatus,
     serverAddr,
@@ -27,7 +28,7 @@
     installUpdate,
   } from "../stores/updater";
   import { CHANGELOG } from "../changelog";
-  import { Monitor, Sun, Moon, Mic, ArrowLeft, Save } from "@lucide/svelte";
+  import { Monitor, Sun, Moon, Mic, ArrowLeft, Save, Download, Upload } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import DevicesPane from "../components/DevicesPane.svelte";
@@ -67,6 +68,9 @@
   });
   let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
+  let showSyncAdvanced = $state(false);
+  let showTranscriptionAdvanced = $state(false);
+  let showOlderChangelog = $state(false);
 
   // Mirrors the titlebar dot, spelled out. "starting" is the brief window
   // between flipping the toggle on and the listener binding its port.
@@ -247,6 +251,7 @@
     { name: "orange", color: "#ea580c", label: "Orange" },
     { name: "teal", color: "#0d9488", label: "Teal" },
   ];
+  const visibleChangelog = $derived(showOlderChangelog ? CHANGELOG : CHANGELOG.slice(0, 3));
 
   function toggleQuickReaction(emoji: string) {
     if ($quickReactions.includes(emoji)) {
@@ -332,6 +337,7 @@
     }
     const path = Array.isArray(src) ? src[0] : src;
     if (!path) return;
+    if (!confirm("Import this backup? Ncy will merge any new events and media into your local chats.")) return;
     backupBusy = true;
     try {
       const r = await api.importBackup(path);
@@ -430,7 +436,7 @@
         </span>
       </label>
       <label class="opt-row">
-        <span class="opt-label">Ask before deleting</span>
+        <span class="opt-label">Confirm before deleting</span>
         <span class="switch">
           <input
             type="checkbox"
@@ -449,10 +455,13 @@
   </section>
   {:else if $settingsTab === "sync"}
   <section class="group">
-    <h2>Sync server</h2>
+    <h2>Device sync</h2>
     <div class="opt-list">
       <label class="opt-row">
-        <span class="opt-label">Enable sync</span>
+        <span class="opt-label">
+          Sync with nearby devices
+          <span class="inline-hint">{serverStatusLabel}</span>
+        </span>
         <span class="switch">
           <input
             type="checkbox"
@@ -462,10 +471,6 @@
           <span class="slider"></span>
         </span>
       </label>
-      <div class="opt-row">
-        <span class="opt-label">Status</span>
-        <span class="inline-hint">{serverStatusLabel}</span>
-      </div>
     </div>
   </section>
 
@@ -474,27 +479,24 @@
     <div class="opt-list">
       <label class="field">
         <span class="field-label">Device name</span>
-        <input
-          type="text"
-          bind:value={deviceName}
-          oninput={markDirty}
-        />
+        <div class="row device-name-row">
+          <input
+            type="text"
+            bind:value={deviceName}
+            oninput={markDirty}
+          />
+          <button type="button" class="ghost" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
+            {showSyncAdvanced ? "Hide advanced" : "Advanced"}
+          </button>
+        </div>
       </label>
+      {#if showSyncAdvanced}
       {#if $identity}
         <div class="opt-row">
           <span class="opt-label">Device ID</span>
           <code class="id">{$identity.deviceId}</code>
         </div>
       {/if}
-    </div>
-  </section>
-
-  <!-- Discovery and the paired-device list are inert without a running server,
-       so they collapse rather than sit there disabled. -->
-  {#if desktopPrefs.syncServerEnabled}
-    <section class="group">
-      <h2>Nearby discovery</h2>
-      <div class="opt-list">
         <label class="field">
           <span class="field-label">Sync port · restart to apply</span>
           <input
@@ -505,24 +507,20 @@
             oninput={markDirty}
           />
         </label>
-        <label class="opt-row">
-          <span class="opt-label">
-            Visible to nearby devices
-            <span class="inline-hint">QR and JSON still work when off.</span>
-          </span>
-          <span class="switch">
-            <input
-              type="checkbox"
-              bind:checked={discoverable}
-              onchange={markDirty}
-            />
-            <span class="slider"></span>
-          </span>
-        </label>
-      </div>
-    </section>
+      {/if}
+    </div>
+  </section>
 
-    <DevicesPane />
+  <!-- Discovery and the paired-device list are inert without a running server,
+       so they collapse rather than sit there disabled. -->
+  {#if desktopPrefs.syncServerEnabled}
+    <DevicesPane
+      discoverable={discoverable}
+      onDiscoverableChange={(value) => {
+        discoverable = value;
+        markDirty();
+      }}
+    />
   {/if}
   {:else if $settingsTab === "interface"}
   <section class="group">
@@ -599,6 +597,23 @@
           >Compact</button>
         </div>
       </div>
+      <div class="opt-row">
+        <span class="opt-label">Chat list density</span>
+        <div class="seg">
+          <button
+            type="button"
+            class="seg-btn"
+            class:on={$chatListDensity === "comfortable"}
+            onclick={() => chatListDensity.set("comfortable")}
+          >Comfortable</button>
+          <button
+            type="button"
+            class="seg-btn"
+            class:on={$chatListDensity === "compact"}
+            onclick={() => chatListDensity.set("compact")}
+          >Compact</button>
+        </div>
+      </div>
     </div>
   </section>
   {:else if $settingsTab === "transcription"}
@@ -616,96 +631,126 @@
           <span class="slider"></span>
         </span>
       </label>
-
-    <div class="field">
-      <span class="field-label">Whisper install folder</span>
-      <div class="row" style="gap:.5rem; align-items:center;">
-        <code class="id" style="word-break:break-all">{whisperStatus?.dir ?? "…"}</code>
-        <button class="ghost" onclick={openWhisperFolder}>Open folder</button>
-      </div>
-    </div>
-
-    <div class="field">
-      <span class="field-label">Whisper CLI (<code>{cliFileName}</code>)</span>
-      {#if whisperStatus?.cliPresent}
-        <span class="tiny" style="color:var(--success);">✓ Installed</span>
-      {:else}
-        <span class="tiny" style="color:var(--warning);">
-          Not installed. Extract a
-          <a href="https://github.com/ggml-org/whisper.cpp/releases" target="_blank" rel="noreferrer">whisper.cpp release</a>
-          into the folder above — <code>{cliFileName}</code> plus its sibling
-          <code>{libExt}</code> libraries.{#if isMac || isLinux} Then <code>chmod +x {cliFileName}</code>.{/if}
+      <div class="opt-row">
+        <span class="opt-label">
+          Whisper model
+          {#if whisperStatus?.modelPresent}
+            <span class="inline-hint">Installed{whisperStatus.modelSizeBytes ? ` · ${fmtMB(whisperStatus.modelSizeBytes)}` : ""}</span>
+          {:else if downloadProgress}
+            <span class="inline-hint">Downloading…</span>
+          {:else}
+            <span class="inline-hint">Required for local voice transcription.</span>
+          {/if}
         </span>
-      {/if}
-    </div>
-
-    <div class="field">
-      <span class="field-label">ffmpeg (optional)</span>
-      {#if whisperStatus?.ffmpegPresent}
-        <span class="tiny" style="color:var(--success);">
-          ✓ Found (next to whisper-cli or on PATH).
-        </span>
-      {:else}
-        <span class="tiny muted">
-          Not found. Only needed to decode old webm/opus voice notes — drop
-          <code>{ffmpegFileName}</code> in the folder above or on PATH.
-        </span>
-      {/if}
-    </div>
-
-    <div class="field">
-      <span class="field-label">Model (<code>ggml-tiny.bin</code>)</span>
-      {#if whisperStatus?.modelPresent}
-        <div class="row" style="gap:.5rem; align-items:center;">
-          <span class="tiny" style="color:var(--success);">
-            ✓ Downloaded ({fmtMB(whisperStatus.modelSizeBytes)})
-          </span>
+        {#if whisperStatus?.modelPresent}
           <button class="ghost" onclick={deleteWhisperModel} disabled={whisperBusy}>
-            Delete model
+            Delete
           </button>
-        </div>
-      {:else if downloadProgress}
+        {:else}
+          <button onclick={downloadWhisperModel} disabled={whisperBusy || !!downloadProgress}>
+            Download
+          </button>
+        {/if}
+      </div>
+      {#if downloadProgress}
         {@const pct = downloadProgress.total
           ? Math.floor((downloadProgress.written / downloadProgress.total) * 100)
           : null}
-        <span class="tiny muted">
-          Downloading… {fmtMB(downloadProgress.written)}{downloadProgress.total ? ` / ${fmtMB(downloadProgress.total)} (${pct}%)` : ""}
-        </span>
-        <div class="progress">
-          <div class="progress-bar" style={`width:${pct ?? 0}%`}></div>
+        <div class="panel">
+          <span class="tiny muted">
+            {fmtMB(downloadProgress.written)}{downloadProgress.total ? ` / ${fmtMB(downloadProgress.total)} (${pct}%)` : ""}
+          </span>
+          <div class="progress">
+            <div class="progress-bar" style={`width:${pct ?? 0}%`}></div>
+          </div>
         </div>
-      {:else}
-        <div class="row" style="gap:.5rem; align-items:center;">
-          <span class="tiny muted">Not downloaded.</span>
-          <button onclick={downloadWhisperModel} disabled={whisperBusy}>
-            Download (~74 MB)
-          </button>
+      {/if}
+      <div class="opt-row">
+        <span class="opt-label">
+          Advanced setup
+          <span class="inline-hint">Install folder, CLI, and ffmpeg status.</span>
+        </span>
+        <button type="button" class="subtle compact-btn" onclick={() => showTranscriptionAdvanced = !showTranscriptionAdvanced}>
+          {showTranscriptionAdvanced ? "Hide" : "Show"}
+        </button>
+      </div>
+      {#if showTranscriptionAdvanced}
+        <div class="field">
+          <span class="field-label">Whisper install folder</span>
+          <div class="row wrap-row">
+            <code class="id path-id">{whisperStatus?.dir ?? "…"}</code>
+            <button class="ghost" onclick={openWhisperFolder}>Open folder</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Whisper CLI (<code>{cliFileName}</code>)</span>
+          {#if whisperStatus?.cliPresent}
+            <span class="tiny" style="color:var(--success);">Installed</span>
+          {:else}
+            <span class="tiny" style="color:var(--warning);">
+              Not installed. Extract a
+              <a href="https://github.com/ggml-org/whisper.cpp/releases" target="_blank" rel="noreferrer">whisper.cpp release</a>
+              into the folder above: <code>{cliFileName}</code> plus its sibling
+              <code>{libExt}</code> libraries.{#if isMac || isLinux} Then <code>chmod +x {cliFileName}</code>.{/if}
+            </span>
+          {/if}
+        </div>
+
+        <div class="field">
+          <span class="field-label">ffmpeg (optional)</span>
+          {#if whisperStatus?.ffmpegPresent}
+            <span class="tiny" style="color:var(--success);">
+              Found next to whisper-cli or on PATH.
+            </span>
+          {:else}
+            <span class="tiny muted">
+              Only needed to decode old webm/opus voice notes. Put
+              <code>{ffmpegFileName}</code> in the folder above or on PATH.
+            </span>
+          {/if}
         </div>
       {/if}
     </div>
-    </div>
 
     {#if whisperError}
-      <span class="tiny" style="color:var(--danger);">{whisperError}</span>
+      <div class="panel">
+        <span class="tiny" style="color:var(--danger);">{whisperError}</span>
+      </div>
     {/if}
   </section>
   {:else if $settingsTab === "backup"}
   <section class="group">
     <h2>Backup</h2>
     <div class="opt-list">
-      <div class="field">
-        <div class="action-group">
-          <button onclick={doExport} disabled={backupBusy}>
-            {backupBusy ? "Working…" : "Export"}
-          </button>
-          <button onclick={doImport} disabled={backupBusy}>
-            {backupBusy ? "Working…" : "Import"}
-          </button>
-        </div>
-        {#if backupMsg}
-          <span class="muted tiny">{backupMsg}</span>
-        {/if}
+      <div class="opt-row backup-action-row">
+        <span class="opt-label backup-action-label">
+          <span class="backup-action-title">
+            <Download size={18} strokeWidth={2.25} />
+            Export everything
+          </span>
+        </span>
+        <button class="backup-row-button" onclick={doExport} disabled={backupBusy}>
+          {backupBusy ? "Working…" : "Export"}
+        </button>
       </div>
+      <div class="opt-row backup-action-row">
+        <span class="opt-label backup-action-label">
+          <span class="backup-action-title">
+            <Upload size={18} strokeWidth={2.25} />
+            Import backup
+          </span>
+          <span class="inline-hint">Merges new chats, events, and media into this device.</span>
+        </span>
+        <button class="ghost backup-row-button" onclick={doImport} disabled={backupBusy}>
+          {backupBusy ? "Working…" : "Import"}
+        </button>
+      </div>
+      {#if backupMsg}
+        <div class="panel backup-status">
+          <span class="muted tiny">{backupMsg}</span>
+        </div>
+      {/if}
     </div>
   </section>
   {:else if $settingsTab === "about"}
@@ -765,7 +810,7 @@
   <section class="group">
     <h2>Changelog</h2>
     <div class="changelog">
-      {#each CHANGELOG as rel (rel.version)}
+      {#each visibleChangelog as rel (rel.version)}
         <div class="rel">
           <div class="rel-head">
             <span class="mono rel-ver">v{rel.version}</span>
@@ -778,6 +823,13 @@
           </ul>
         </div>
       {/each}
+      {#if CHANGELOG.length > 3}
+        <div class="rel">
+          <button type="button" class="subtle compact-btn" onclick={() => showOlderChangelog = !showOlderChangelog}>
+            {showOlderChangelog ? "Show less" : "Show older"}
+          </button>
+        </div>
+      {/if}
     </div>
   </section>
   {/if}
@@ -872,18 +924,54 @@
     gap: .3rem;
   }
   .rel-list li { font-size: .88rem; line-height: 1.45; }
-  .action-group {
+  .backup-action-row {
+    align-items: center;
+  }
+  .backup-action-label {
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+  }
+  .backup-action-title {
     display: inline-flex;
-    align-items: stretch;
-    width: fit-content;
-    border-radius: var(--radius);
-    overflow: hidden;
+    align-items: center;
+    gap: .55rem;
   }
-  .action-group button {
-    border-radius: 0;
+  .backup-action-title :global(svg) {
+    color: var(--text-muted);
+    flex-shrink: 0;
   }
-  .action-group button + button {
-    border-left: 1px solid color-mix(in srgb, var(--accent-contrast) 30%, transparent);
+  .backup-row-button {
+    min-width: 6.5rem;
+    flex-shrink: 0;
+  }
+  .backup-status {
+    padding-top: .65rem;
+    padding-bottom: .65rem;
+  }
+  .compact-btn {
+    padding: .42rem .7rem;
+    min-width: 4.75rem;
+    flex-shrink: 0;
+    font-size: .85rem;
+  }
+  .wrap-row {
+    gap: .5rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .path-id {
+    word-break: break-all;
+  }
+  .device-name-row {
+    gap: .5rem;
+    flex-wrap: wrap;
+  }
+  .device-name-row input {
+    flex: 1 1 220px;
+  }
+  .device-name-row .ghost {
+    flex-shrink: 0;
   }
 
   /* Master-detail panel: one bordered frame holding the category rail (left,

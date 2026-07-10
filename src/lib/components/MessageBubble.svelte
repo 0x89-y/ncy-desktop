@@ -13,18 +13,43 @@
   } from "../stores/app";
   import { openViewer } from "../stores/viewer";
   import RichText from "./RichText.svelte";
-  import { formatFullTime, formatMessageTime } from "../format";
-  import { Mic, Image as ImageIcon, AlarmClock, Check, Pencil, Star, Trash2, X } from "@lucide/svelte";
+  import { formatFullTime, formatMessageTime, replyPreviewText } from "../format";
+  import {
+    Mic,
+    Image as ImageIcon,
+    AlarmClock,
+    Check,
+    Pause,
+    Pencil,
+    Play,
+    Reply,
+    Star,
+    Trash2,
+    X,
+  } from "@lucide/svelte";
 
   let {
     message,
     bubbleColor,
     bubbleGradient,
+    onReply,
+    onJumpToReplyTarget,
+    replyTargetExists = false,
+    highlighted = false,
   }: {
     message: Message;
     bubbleColor: string | null;
     bubbleGradient: boolean;
+    onReply?: (m: Message) => void;
+    onJumpToReplyTarget?: (id: string) => void;
+    /** False when the quoted message has since been deleted — quote stays, jump doesn't. */
+    replyTargetExists?: boolean;
+    /** Briefly tinted after a jump landed on this message. */
+    highlighted?: boolean;
   } = $props();
+
+  const quoteText = $derived(replyPreviewText(message.replyToPreview, message.replyToType));
+  const quoteTime = $derived(formatMessageTime(message.replyToCreatedAt));
 
   const time = $derived(formatMessageTime(message.createdAt));
   const fullTime = $derived(formatFullTime(message.createdAt));
@@ -276,8 +301,67 @@
 
   let voiceDataUrl = $state<string | null>(null);
   let voiceMissing = $state(false);
+  let voiceAudio = $state<HTMLAudioElement>();
+  let voicePlaying = $state(false);
+  let voiceCurrentSeconds = $state(0);
+  let voiceMetadataDuration = $state<number | null>(null);
   let imageDataUrl = $state<string | null>(null);
   let imageMissing = $state(false);
+
+  const voiceDurationSeconds = $derived(
+    voiceMetadataDuration ?? (message.voiceDurationMs ?? 0) / 1000,
+  );
+  const voiceProgress = $derived(
+    voiceDurationSeconds > 0
+      ? Math.min(1, voiceCurrentSeconds / voiceDurationSeconds)
+      : 0,
+  );
+  const voiceBars = Array.from({ length: 30 }, (_, index) => {
+    // Stable, message-specific pseudo-waveform. It keeps the player visually
+    // useful without decoding every audio file just to sample its amplitude.
+    let value = 0;
+    for (let i = 0; i < message.id.length; i += 1) {
+      value = (value * 31 + message.id.charCodeAt(i) + index * 17) | 0;
+    }
+    return 0.25 + (Math.abs(value) % 75) / 100;
+  });
+
+  function formatVoiceTime(seconds: number): string {
+    if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+    const whole = Math.floor(seconds);
+    return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+  }
+
+  function syncVoiceState() {
+    if (!voiceAudio) return;
+    voiceCurrentSeconds = Number.isFinite(voiceAudio.currentTime)
+      ? voiceAudio.currentTime
+      : 0;
+    if (Number.isFinite(voiceAudio.duration) && voiceAudio.duration > 0) {
+      voiceMetadataDuration = voiceAudio.duration;
+    }
+  }
+
+  async function toggleVoicePlayback() {
+    if (!voiceAudio) return;
+    if (voiceAudio.paused) {
+      try {
+        await voiceAudio.play();
+      } catch (e) {
+        console.error("play voice message", e);
+      }
+    } else {
+      voiceAudio.pause();
+    }
+  }
+
+  function seekVoice(e: Event) {
+    if (!voiceAudio) return;
+    const next = Number((e.currentTarget as HTMLInputElement).value);
+    if (!Number.isFinite(next)) return;
+    voiceAudio.currentTime = next;
+    voiceCurrentSeconds = next;
+  }
 
   // Re-fetch when the hash changes OR a blob with the relevant hash just arrived.
   $effect(() => {
@@ -328,13 +412,23 @@
 <div
   class="row-wrap"
   class:compact={$messageDensity === "compact"}
+  class:highlighted
+  data-mid={message.id}
   onmouseenter={showHoverStripSoon}
   onmouseleave={hideHoverStrip}
   role="group"
 >
-  {#if hovering && !editing && !reminding && $quickReactions.length}
-    <!-- Hover quick-reactions strip, Slack-style, floating above the bubble. -->
+  {#if hovering && !editing && !reminding}
+    <!-- Hover strip, Slack-style, floating above the bubble: reply + quick reactions. -->
     <div class="hover-strip">
+      <button
+        type="button"
+        class="rx-quick reply-hover"
+        disabled={busy}
+        title="Reply"
+        aria-label="Reply"
+        onclick={() => onReply?.(message)}
+      ><Reply size={14} /></button>
       {#each $quickReactions as e (e)}
         <button
           type="button"
@@ -354,10 +448,84 @@
     role="group"
     oncontextmenu={openCtx}
   >
+    {#if message.replyToId}
+      <!-- Rendered from the snapshot frozen on this message, not the live original.
+           A quote whose target was deleted stays readable but is inert. -->
+      {#if replyTargetExists}
+        <button
+          type="button"
+          class="reply-quote"
+          title="Jump to the original message"
+          onclick={() => onJumpToReplyTarget?.(message.replyToId!)}
+        >
+          <span class="reply-quote-time">{quoteTime}</span>
+          <span class="reply-quote-text">{quoteText}</span>
+        </button>
+      {:else}
+        <div class="reply-quote deleted">
+          <span class="reply-quote-time">{quoteTime}</span>
+          <span class="reply-quote-text">{quoteText}</span>
+        </div>
+      {/if}
+    {/if}
     {#if message.type === "VOICE"}
       <div class="voice">
         {#if voiceDataUrl}
-          <audio controls preload="none" src={voiceDataUrl}></audio>
+          <div class="voice-player">
+            <audio
+              bind:this={voiceAudio}
+              preload="metadata"
+              src={voiceDataUrl}
+              onloadedmetadata={syncVoiceState}
+              ondurationchange={syncVoiceState}
+              ontimeupdate={syncVoiceState}
+              onplay={() => (voicePlaying = true)}
+              onpause={() => (voicePlaying = false)}
+              onended={(event) => {
+                voicePlaying = false;
+                event.currentTarget.currentTime = 0;
+                voiceCurrentSeconds = 0;
+              }}
+            ></audio>
+            <button
+              type="button"
+              class="voice-toggle"
+              onclick={() => void toggleVoicePlayback()}
+              title={voicePlaying ? "Pause voice message" : "Play voice message"}
+              aria-label={voicePlaying ? "Pause voice message" : "Play voice message"}
+            >
+              {#if voicePlaying}
+                <Pause size={17} fill="currentColor" strokeWidth={2.25} />
+              {:else}
+                <Play size={17} fill="currentColor" strokeWidth={2.25} />
+              {/if}
+            </button>
+            <div class="voice-track">
+              <div class="voice-waveform" aria-hidden="true">
+                {#each voiceBars as height, index}
+                  <span
+                    class:played={(index + 1) / voiceBars.length <= voiceProgress}
+                    style={`height:${Math.round(height * 100)}%`}
+                  ></span>
+                {/each}
+              </div>
+              <input
+                class="voice-seek"
+                type="range"
+                min="0"
+                max={Math.max(voiceDurationSeconds, 0.01)}
+                step="0.01"
+                value={voiceCurrentSeconds}
+                oninput={seekVoice}
+                aria-label="Voice message position"
+                aria-valuetext={`${formatVoiceTime(voiceCurrentSeconds)} of ${formatVoiceTime(voiceDurationSeconds)}`}
+              />
+              <div class="voice-time">
+                <span>{formatVoiceTime(voiceCurrentSeconds)}</span>
+                <span>{formatVoiceTime(voiceDurationSeconds)}</span>
+              </div>
+            </div>
+          </div>
         {:else if voiceHash}
           <div class="row muted tiny">
             <span class="icon"><Mic size={14} strokeWidth={2.25} /></span>
@@ -563,6 +731,11 @@
     oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }}
   ></button>
   <div class="ctx-menu" role="menu" style={`left:${ctx.x}px; top:${ctx.y}px;`}>
+    <button
+      type="button"
+      disabled={busy}
+      onclick={() => { closeCtx(); onReply?.(message); }}
+    >Reply</button>
     {#if message.type === "TEXT"}
       <button
         type="button"
@@ -614,6 +787,23 @@
   }
   .row-wrap.compact {
     margin-bottom: .22rem;
+  }
+  /* Flash after a jump-to-original lands here. Fades on its own; the timer in
+     ChatView clears the flag afterwards. */
+  .row-wrap.highlighted .bubble {
+    animation: reply-flash 1.4s ease-out;
+  }
+  @keyframes reply-flash {
+    0%, 55% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent); }
+    100% { box-shadow: 0 0 0 3px transparent; }
+  }
+  /* The reply button sits in the same strip as the reactions but carries an icon,
+     so it opts out of the emoji font-size. */
+  .rx-quick.reply-hover {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted, inherit);
   }
   /* Floating quick-reactions strip. Delayed in JS so scanning messages does not
      constantly flash controls. */
@@ -674,6 +864,43 @@
     background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 22%, transparent);
   }
   .rx-chip:disabled { opacity: .5; cursor: default; }
+  /* Quoted message at the top of a reply bubble. Rendered as a <button> when the
+     original still exists so it is keyboard-reachable, as a <div> when it does not. */
+  .reply-quote {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    width: 100%;
+    margin-bottom: .3rem;
+    padding: .25rem .45rem;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 12%, transparent);
+    border: none;
+    border-left: 3px solid color-mix(in srgb, var(--bubble-mine-on, currentColor) 70%, transparent);
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .reply-quote:hover:not(.deleted) {
+    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 18%, transparent);
+  }
+  .reply-quote.deleted { cursor: default; }
+  .reply-quote-time {
+    font-size: .68rem;
+    opacity: .7;
+  }
+  .reply-quote-text {
+    font-size: .82rem;
+    opacity: .9;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
   .bubble {
     background: var(--bubble-mine);
     color: var(--bubble-mine-on);
@@ -732,10 +959,81 @@
     line-height: 1;
   }
   .voice .icon { display: inline-flex; align-items: center; line-height: 0; }
-  .voice audio {
+  .voice-player {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    width: min(260px, 62vw);
+    min-width: 210px;
+  }
+  .voice-player audio { display: none; }
+  .voice-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 2.15rem;
+    height: 2.15rem;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: color-mix(in srgb, currentColor 18%, transparent);
+    color: inherit;
+  }
+  .voice-toggle:hover:not(:disabled) {
+    background: color-mix(in srgb, currentColor 28%, transparent);
+  }
+  .voice-toggle :global(svg) { display: block; }
+  .voice-track {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    padding-top: 2px;
+  }
+  .voice-waveform {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    height: 24px;
+    overflow: hidden;
+  }
+  .voice-waveform span {
+    flex: 1 1 0;
+    min-width: 2px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: .35;
+  }
+  .voice-waveform span.played { opacity: 1; }
+  .voice-seek {
+    position: absolute;
+    inset: 0 0 14px;
     width: 100%;
-    max-width: 320px;
-    height: 32px;
+    height: 24px;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    opacity: 0;
+  }
+  .voice-seek:focus-visible {
+    accent-color: currentColor;
+  }
+  .voice-track:focus-within {
+    border-radius: 4px;
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+  .voice-time {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+    opacity: .72;
+  }
+  .bubble.compact .voice-player {
+    width: min(240px, 60vw);
   }
   .transcript {
     margin-top: .3rem;

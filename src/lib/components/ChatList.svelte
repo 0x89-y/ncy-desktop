@@ -505,6 +505,9 @@
     border: none;
     border-radius: 0;
   }
+  .list > :global(.row-btn:last-child) {
+    border-bottom: 1px solid var(--border);
+  }
   .empty {
     padding: 2rem 1rem;
     text-align: center;
