@@ -162,6 +162,7 @@ pub async fn announce_mdns(state: &AppState, settings: &AppSettings, port: u16) 
         &host,
         port,
         &state.identity_device_id,
+        "request",
     ) {
         Ok(reg) => *guard = Some(reg),
         Err(e) => {
@@ -275,6 +276,7 @@ pub fn run() {
                     &advertised_host,
                     settings.port,
                     &identity.device_id,
+                    "request",
                 )
                 .map_err(|e| {
                     tracing::warn!("mDNS announce failed: {e}");
@@ -324,6 +326,7 @@ pub fn run() {
             // wakes it when a peer is added/removed.
             let peer_deps = Arc::new(PeerSyncDeps {
                 identity_device_id: identity.device_id.clone(),
+                identity_name: settings.device_name.clone(),
                 events: events.clone(),
                 bus: bus.clone(),
                 clock: clock.clone(),

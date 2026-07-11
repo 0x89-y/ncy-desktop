@@ -15,6 +15,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.0",
+    date: "2026-07-11",
+    changes: [
+      "Paired devices are rediscovered automatically after their LAN address changes.",
+      "Incoming sync connections now report their device name.",
+      "Discovered devices now advertise which pairing flow they support.",
+      "Sync now rejects oversized frames and media transfers.",
+      "Media sync now streams files with bounded memory use.",
+      "Stalled media transfers now clean themselves up automatically.",
+    ],
+  },
+  {
     version: "0.5.0",
     date: "2026-07-10",
     changes: [
