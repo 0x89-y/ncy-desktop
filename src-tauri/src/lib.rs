@@ -91,7 +91,8 @@ pub fn spawn_sync(state: &AppState, port: u16) -> SyncHandle {
     let bus_for_err = state.bus.clone();
     let server_shutdown = shutdown.subscribe();
     let server = tauri::async_runtime::spawn(async move {
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let advertised_host = network::best_lan_ip();
+        let addr = network::wildcard_bind_addr(&advertised_host, port);
         if let Err(e) = run_server_with_shutdown(ctx, addr, server_shutdown).await {
             tracing::error!("sync server fatal: {e}");
             *status_for_err.write().await = "error";
@@ -425,6 +426,7 @@ pub fn run() {
             commands::delete_pairing,
             commands::add_peer,
             commands::list_peers,
+            commands::set_peer_enabled,
             commands::delete_peer,
             commands::get_settings,
             commands::update_settings,

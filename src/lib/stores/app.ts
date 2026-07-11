@@ -17,6 +17,7 @@ export const identity = writable<DeviceIdentityView | null>(null);
 export const lanIps = writable<string[]>([]);
 export const advertisedHost = writable<string>("");
 export const connectedPeers = writable<Set<string>>(new Set());
+export const peerErrors = writable<Record<string, string>>({});
 export const serverStatus = writable<"starting" | "running" | "error" | "stopped">("starting");
 export const serverAddr = writable<string>("");
 export const lastSyncEvent = writable<SyncEventPayload | null>(null);
@@ -329,6 +330,11 @@ export async function bootstrap() {
           next.add(ev.peer);
           return next;
         });
+        peerErrors.update((errors) => {
+          const next = { ...errors };
+          delete next[ev.peer];
+          return next;
+        });
         await refreshPairings();
         await refreshPeers();
         break;
@@ -361,6 +367,9 @@ export async function bootstrap() {
           next.add(ev.hash);
           return next;
         });
+        break;
+      case "peer-error":
+        peerErrors.update((errors) => ({ ...errors, [ev.peer]: ev.message }));
         break;
       case "pair-requested":
         enqueuePairRequest({

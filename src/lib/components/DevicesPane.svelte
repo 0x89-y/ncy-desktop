@@ -7,6 +7,7 @@
     peers,
     refreshPeers,
     connectedPeers,
+    peerErrors,
     lanIps,
     advertisedHost,
     refreshLanIps,
@@ -96,6 +97,18 @@
   async function removePeer(id: string) {
     if (!confirm("Stop syncing with this desktop?")) return;
     await api.deletePeer(id);
+    await refreshPeers();
+  }
+
+  async function setPeerEnabled(id: string, enabled: boolean) {
+    await api.setPeerEnabled(id, enabled);
+    if (!enabled) {
+      connectedPeers.update((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
     await refreshPeers();
   }
 
@@ -269,7 +282,7 @@
         {/each}
 
         {#each $peers as p (p.id)}
-          {@const online = $connectedPeers.has(p.id)}
+          {@const online = p.enabled && $connectedPeers.has(p.id)}
           <div class="panel peer-card">
             <div class="col" style="flex:1; min-width:0;">
               <div class="row" style="gap:.45rem">
@@ -283,12 +296,20 @@
               <span class="muted tiny">
                 {p.host}:{p.port}
                 {#if p.lastSeenAt} · last seen {formatFullTime(p.lastSeenAt)}{/if}
+                {#if !p.enabled} · automatic sync paused
+                {:else if !online && p.foregroundOnly} · open Ncy and enable phone sync there{/if}
+                {#if p.enabled && $peerErrors[p.id]} · {$peerErrors[p.id]}{/if}
               </span>
             </div>
             <div class="row" style="gap:.3rem">
               <span class="chip" class:active={online}>
-                {online ? "Connected" : "Offline"}
+                {!p.enabled ? "Paused" : online ? "Connected" : $peerErrors[p.id] ? "Sync error" : p.foregroundOnly ? "Open Ncy / enable sync" : "Offline"}
               </span>
+              <button
+                class="ghost compact"
+                onclick={() => setPeerEnabled(p.id, !p.enabled)}
+                title={p.enabled ? "Pause automatic sync" : "Resume automatic sync"}
+              >{p.enabled ? "Pause" : "Resume"}</button>
               <button
                 class="icon-btn"
                 onclick={() => removePeer(p.id)}

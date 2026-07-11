@@ -131,6 +131,8 @@ export type PeerView = {
   label: string;
   host: string;
   port: number;
+  foregroundOnly: boolean;
+  enabled: boolean;
   createdAt: number;
   lastSeenAt: number | null;
 };
@@ -203,6 +205,7 @@ export type SyncEventPayload =
   | { kind: "event-authored"; chatId: string; eventId: string }
   | { kind: "blob-arrived"; hash: string }
   | { kind: "peer-disconnected"; peer: string }
+  | { kind: "peer-error"; peer: string; message: string }
   | { kind: "server-started"; addr: string }
   | { kind: "server-stopped" }
   | { kind: "server-error"; message: string }
@@ -246,6 +249,8 @@ export const api = {
   addPeer: (payloadJson: string) =>
     invoke<void>("add_peer", { payloadJson }),
   listPeers: () => invoke<PeerView[]>("list_peers"),
+  setPeerEnabled: (id: string, enabled: boolean) =>
+    invoke<void>("set_peer_enabled", { id, enabled }),
   deletePeer: (id: string) => invoke<void>("delete_peer", { id }),
   getSettings: () => invoke<AppSettings>("get_settings"),
   updateSettings: (settings: AppSettings) =>

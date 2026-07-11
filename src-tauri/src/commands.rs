@@ -483,6 +483,8 @@ struct IncomingPairing {
     host: String,
     port: u16,
     secret: String,
+    #[serde(default)]
+    availability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -491,6 +493,9 @@ pub struct PeerView {
     pub label: String,
     pub host: String,
     pub port: u16,
+    #[serde(rename = "foregroundOnly")]
+    pub foreground_only: bool,
+    pub enabled: bool,
     #[serde(rename = "createdAt")]
     pub created_at: i64,
     #[serde(rename = "lastSeenAt")]
@@ -524,6 +529,8 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
         label,
         host: p.host,
         port: p.port,
+        availability: p.availability,
+        disabled: false,
         secret_b64: p.secret,
         created_at: now_ms(),
         last_seen_at: None,
@@ -547,6 +554,8 @@ pub async fn list_peers(state: State<'_, AppState>) -> Result<Vec<PeerView>, Str
             label: p.label.clone(),
             host: p.host.clone(),
             port: p.port,
+            foreground_only: p.availability.as_deref() == Some("foreground"),
+            enabled: !p.disabled,
             created_at: p.created_at,
             last_seen_at: p.last_seen_at,
         })
@@ -562,6 +571,22 @@ pub async fn delete_peer(state: State<'_, AppState>, id: String) -> Result<(), S
     if changed {
         save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
     }
+    drop(guard);
+    state.peer_notify.notify_one();
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_peer_enabled(
+    state: State<'_, AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut guard = state.peers.write().await;
+    let peer = guard.peers.iter_mut().find(|peer| peer.id == id)
+        .ok_or_else(|| "peer not found".to_string())?;
+    peer.disabled = !enabled;
+    save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
     drop(guard);
     state.peer_notify.notify_one();
     Ok(())
@@ -2016,6 +2041,9 @@ fn ev_to_json(ev: &SyncEvent) -> serde_json::Value {
         }
         SyncEvent::PeerDisconnected { peer } => {
             serde_json::json!({"kind":"peer-disconnected","peer":peer})
+        }
+        SyncEvent::PeerError { peer, message } => {
+            serde_json::json!({"kind":"peer-error","peer":peer,"message":message})
         }
         SyncEvent::ServerStarted { addr } => {
             serde_json::json!({"kind":"server-started","addr":addr})

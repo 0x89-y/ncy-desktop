@@ -15,6 +15,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.1",
+    date: "2026-07-11",
+    changes: [
+      "Sync now supports IPv6-only local networks.",
+      "Offline phone hosts now explain when Ncy needs to be opened on the phone.",
+      "Automatic sync can now be paused for individual devices.",
+      "Sync now rejects device clocks that are dangerously far ahead.",
+    ],
+  },
+  {
     version: "0.6.0",
     date: "2026-07-11",
     changes: [
