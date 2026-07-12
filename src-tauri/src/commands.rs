@@ -5,10 +5,12 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::model::event::op_type;
-use crate::model::{BlockType, ChatMetadata, Message, MessageType, RichTextBlock, RichTextSpan};
+use crate::model::{
+    BlockType, ChatMetadata, FileAttachment, Message, MessageType, RichTextBlock, RichTextSpan,
+};
 use crate::storage::{
-    materialize, now_ms, reset_sync_watermarks, save_pairings, save_peers, AppSettings,
-    EventStore, MaterializedChat, OutboundPeer, Pairing,
+    materialize, now_ms, reset_sync_watermarks, save_pairings, save_peers, AppSettings, EventStore,
+    MaterializedChat, OutboundPeer, Pairing,
 };
 use crate::sync::{author_event, SyncEvent};
 use crate::AppState;
@@ -39,7 +41,10 @@ pub struct DesktopPrefs {
     /// `desktop_prefs.json` is read that predates this key, and those users are
     /// already syncing with a phone. A fresh install has no file at all, so it
     /// takes `Default` below and starts off.
-    #[serde(rename = "syncServerEnabled", default = "sync_enabled_for_existing_install")]
+    #[serde(
+        rename = "syncServerEnabled",
+        default = "sync_enabled_for_existing_install"
+    )]
     pub sync_server_enabled: bool,
 }
 
@@ -77,7 +82,10 @@ pub fn load_desktop_prefs(settings_path: &std::path::Path) -> DesktopPrefs {
     prefs
 }
 
-fn save_desktop_prefs_file(settings_path: &std::path::Path, prefs: &DesktopPrefs) -> Result<(), String> {
+fn save_desktop_prefs_file(
+    settings_path: &std::path::Path,
+    prefs: &DesktopPrefs,
+) -> Result<(), String> {
     let path = desktop_prefs_path(settings_path);
     let bytes = serde_json::to_vec_pretty(prefs).map_err(|e| e.to_string())?;
     std::fs::write(path, bytes).map_err(|e| e.to_string())
@@ -246,7 +254,11 @@ fn list_chats_impl(events: Arc<EventStore>) -> anyhow::Result<Vec<ChatSummary>> 
     out.sort_by(|a, b| {
         b.is_pinned
             .cmp(&a.is_pinned)
-            .then(b.last_message_at.unwrap_or(0).cmp(&a.last_message_at.unwrap_or(0)))
+            .then(
+                b.last_message_at
+                    .unwrap_or(0)
+                    .cmp(&a.last_message_at.unwrap_or(0)),
+            )
             .then(b.created_at.cmp(&a.created_at))
     });
     Ok(out)
@@ -441,20 +453,15 @@ pub async fn pair_accept(
 
 /// Frontend rejected the pair request. Signal the waiting server handler.
 #[tauri::command]
-pub async fn pair_reject(
-    state: State<'_, AppState>,
-    session_id: String,
-) -> Result<(), String> {
+pub async fn pair_reject(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
     let session = {
         let mut reg = state.pairing_registry.lock().await;
         reg.remove(&session_id)
     };
     if let Some(session) = session {
-        let _ = session
-            .decision_tx
-            .send(crate::sync::PairDecision::Reject {
-                reason: "rejected".to_string(),
-            });
+        let _ = session.decision_tx.send(crate::sync::PairDecision::Reject {
+            reason: "rejected".to_string(),
+        });
     }
     Ok(())
 }
@@ -583,7 +590,10 @@ pub async fn set_peer_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     let mut guard = state.peers.write().await;
-    let peer = guard.peers.iter_mut().find(|peer| peer.id == id)
+    let peer = guard
+        .peers
+        .iter_mut()
+        .find(|peer| peer.id == id)
         .ok_or_else(|| "peer not found".to_string())?;
     peer.disabled = !enabled;
     save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
@@ -755,12 +765,7 @@ fn seal_envelope(
 /// log nor the wire ever carries plaintext. Refuses if the chat is protected but
 /// locked — the desktop must hold the PIN-derived key (chat unlocked) to author
 /// into it, otherwise we'd either leak plaintext or write a body the phone hides.
-fn author_message(
-    state: &AppState,
-    chat_id: &str,
-    op: &str,
-    msg: &Message,
-) -> Result<(), String> {
+fn author_message(state: &AppState, chat_id: &str, op: &str, msg: &Message) -> Result<(), String> {
     let meta = current_metadata(&state.events, chat_id)?;
     let payload = if meta.is_protected {
         let key = state
@@ -768,8 +773,7 @@ fn author_message(
             .key_for(chat_id)
             .ok_or_else(|| "chat is locked — unlock it before sending".to_string())?;
         let plaintext = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
-        let sealed =
-            crate::sync::protection::seal(&key, &plaintext).map_err(|e| e.to_string())?;
+        let sealed = crate::sync::protection::seal(&key, &plaintext).map_err(|e| e.to_string())?;
         seal_envelope(&sealed, None)
     } else {
         serde_json::to_value(msg).map_err(|e| e.to_string())?
@@ -806,14 +810,12 @@ fn reseal_all_messages(
     // Phase 1 — recover plaintext for every message event (no mutation yet).
     let mut work: Vec<(String, String, Vec<u8>)> = Vec::new();
     for w in &evts {
-        let is_msg =
-            w.op_type == op_type::MESSAGE_CREATED || w.op_type == op_type::MESSAGE_EDITED;
+        let is_msg = w.op_type == op_type::MESSAGE_CREATED || w.op_type == op_type::MESSAGE_EDITED;
         if !is_msg {
             continue;
         }
         let plaintext = if w.payload.get("enc").is_some() {
-            let key = old_key
-                .ok_or_else(|| "chat already has encrypted content".to_string())?;
+            let key = old_key.ok_or_else(|| "chat already has encrypted content".to_string())?;
             crate::sync::protection::open_envelope(&w.payload, key)
                 .ok_or_else(|| "wrong current PIN".to_string())?
         } else {
@@ -916,7 +918,10 @@ pub async fn change_chat_pin(
         crate::sync::protection::derive_key(&old_pin, &salt).map_err(|e| e.to_string())?;
 
     // Verify the current PIN against any one sealed event before mutating.
-    let evts = state.events.read_chat(&chat_id).map_err(|e| e.to_string())?;
+    let evts = state
+        .events
+        .read_chat(&chat_id)
+        .map_err(|e| e.to_string())?;
     let sample = evts.iter().find(|e| {
         matches!(
             e.op_type.as_str(),
@@ -996,6 +1001,7 @@ pub async fn author_send_text(
         message_type: MessageType::Text,
         is_starred: false,
         image_files: vec![],
+        file_attachments: vec![],
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
@@ -1161,6 +1167,7 @@ pub async fn author_send_checklist(
         message_type: MessageType::Checklist,
         is_starred: false,
         image_files: vec![],
+        file_attachments: vec![],
         tags: vec![],
         reminder_at: None,
         checklist_items: cleaned,
@@ -1401,10 +1408,7 @@ pub async fn author_clear_chat_background(
 /// shape as the phone's `deleteChat`, so there's nothing left to read on disk but
 /// the deletion still propagates to offline peers via catchup.
 #[tauri::command]
-pub async fn author_delete_chat(
-    state: State<'_, AppState>,
-    chat_id: String,
-) -> Result<(), String> {
+pub async fn author_delete_chat(state: State<'_, AppState>, chat_id: String) -> Result<(), String> {
     // Refuse if already gone, so we don't append a tombstone to a dead chat.
     current_metadata(&state.events, &chat_id)?;
     let payload = serde_json::json!({ "chatId": chat_id });
@@ -1480,6 +1484,7 @@ pub async fn author_send_message(
         message_type: MessageType::Text,
         is_starred: false,
         image_files: vec![],
+        file_attachments: vec![],
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
@@ -1531,6 +1536,7 @@ pub async fn author_send_voice(
         message_type: MessageType::Voice,
         is_starred: false,
         image_files: vec![],
+        file_attachments: vec![],
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
@@ -1561,8 +1567,7 @@ pub async fn author_send_image(
     source_path: String,
     reply_to_id: Option<String>,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(&source_path)
-        .map_err(|e| format!("read source: {e}"))?;
+    let bytes = std::fs::read(&source_path).map_err(|e| format!("read source: {e}"))?;
     if bytes.is_empty() {
         return Err("empty image file".into());
     }
@@ -1600,11 +1605,66 @@ pub async fn author_send_image(
         reply_to_type: None,
         reply_to_created_at: None,
         image_files: vec![],
+        file_attachments: vec![],
         tags: vec![],
         reminder_at: None,
         checklist_items: vec![],
         reactions: vec![],
         transcript: None,
+    };
+    let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
+}
+
+/// Attach an arbitrary local file as an opaque, content-addressed blob.
+#[tauri::command]
+pub async fn author_send_file(
+    state: State<'_, AppState>,
+    chat_id: String,
+    source_path: String,
+    display_name: String,
+    reply_to_id: Option<String>,
+) -> Result<(), String> {
+    let source = std::path::Path::new(&source_path);
+    let (hash, size) = state
+        .blobs
+        .import_file(source, "file")
+        .map_err(|e| format!("import file: {e}"))?;
+    let fallback_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("File");
+    let name = if display_name.trim().is_empty() {
+        fallback_name.to_string()
+    } else {
+        display_name.trim().to_string()
+    };
+    let msg = Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        chat_id: chat_id.clone(),
+        content: vec![],
+        voice_file: None,
+        voice_duration_ms: None,
+        created_at: now_ms(),
+        edited_at: None,
+        message_type: MessageType::File,
+        is_starred: false,
+        image_files: vec![],
+        file_attachments: vec![FileAttachment {
+            file: format!("files/{hash}.bin"),
+            name,
+            mime_type: None,
+            size_bytes: i64::try_from(size).ok(),
+        }],
+        tags: vec![],
+        reminder_at: None,
+        checklist_items: vec![],
+        reactions: vec![],
+        transcript: None,
+        reply_to_id: None,
+        reply_to_preview: None,
+        reply_to_type: None,
+        reply_to_created_at: None,
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
@@ -1629,6 +1689,47 @@ pub async fn read_blob(
         .read(&hash, &media_type)
         .map_err(|e| e.to_string())?;
     Ok(Some(B64.encode(bytes)))
+}
+
+fn validate_blob_ref(hash: &str, media_type: &str) -> Result<(), String> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        return Err("invalid blob hash".into());
+    }
+    if !matches!(media_type, "voice" | "image" | "file") {
+        return Err("invalid blob media type".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn blob_exists(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<bool, String> {
+    validate_blob_ref(&hash, &media_type)?;
+    Ok(state.blobs.exists(&hash, &media_type))
+}
+
+/** Stream/copy an opaque blob to a path chosen by the user without base64 IPC. */
+#[tauri::command]
+pub async fn save_blob(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+    dest: String,
+) -> Result<(), String> {
+    validate_blob_ref(&hash, &media_type)?;
+    let source = state.blobs.path_for(&hash, &media_type);
+    if !source.is_file() {
+        return Err("file not on this device yet".into());
+    }
+    std::fs::copy(source, dest).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // ---------- Image viewer: view / save / copy ----------
@@ -1730,39 +1831,39 @@ pub struct ImportSummary {
 #[tauri::command]
 pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Result<(), String> {
     use std::io::Write;
-    let file =
-        std::fs::File::create(&dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
+    let file = std::fs::File::create(&dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    let mut copy_dir = |dir: &std::path::Path, prefix: &str, ndjson_only: bool| -> Result<(), String> {
-        let rd = match std::fs::read_dir(dir) {
-            Ok(rd) => rd,
-            Err(_) => return Ok(()), // dir may not exist yet — nothing to back up
-        };
-        for entry in rd.flatten() {
-            let p = entry.path();
-            if !p.is_file() {
-                continue;
-            }
-            let name = match p.file_name().and_then(|s| s.to_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
+    let mut copy_dir =
+        |dir: &std::path::Path, prefix: &str, ndjson_only: bool| -> Result<(), String> {
+            let rd = match std::fs::read_dir(dir) {
+                Ok(rd) => rd,
+                Err(_) => return Ok(()), // dir may not exist yet — nothing to back up
             };
-            if name.contains(".tmp.") {
-                continue; // skip in-progress temp writes
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if !p.is_file() {
+                    continue;
+                }
+                let name = match p.file_name().and_then(|s| s.to_str()) {
+                    Some(n) => n.to_string(),
+                    None => continue,
+                };
+                if name.contains(".tmp.") {
+                    continue; // skip in-progress temp writes
+                }
+                if ndjson_only && !name.ends_with(".ndjson") {
+                    continue;
+                }
+                let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+                zip.start_file(format!("{prefix}/{name}"), opts)
+                    .map_err(|e| e.to_string())?;
+                zip.write_all(&bytes).map_err(|e| e.to_string())?;
             }
-            if ndjson_only && !name.ends_with(".ndjson") {
-                continue;
-            }
-            let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
-            zip.start_file(format!("{prefix}/{name}"), opts)
-                .map_err(|e| e.to_string())?;
-            zip.write_all(&bytes).map_err(|e| e.to_string())?;
-        }
-        Ok(())
-    };
+            Ok(())
+        };
 
     copy_dir(&state.paths.events, "events", true)?;
     copy_dir(state.blobs.root(), "blobs", false)?;
@@ -1798,9 +1899,7 @@ pub async fn import_backup(
         let mut buf = String::new();
         entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
         for line in buf.lines().map(str::trim).filter(|line| !line.is_empty()) {
-            if let Ok(wire) =
-                serde_json::from_str::<crate::model::event::ChatEventWire>(line)
-            {
+            if let Ok(wire) = serde_json::from_str::<crate::model::event::ChatEventWire>(line) {
                 if !wire.hlc.is_acceptable_remote(import_now) {
                     return Err(
                         "backup contains an invalid or future-skewed event clock".to_string()
@@ -2006,10 +2105,14 @@ pub async fn transcription_open_folder(state: State<'_, AppState>) -> Result<(),
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new(if cfg!(target_os = "macos") { "open" } else { "xdg-open" })
-            .arg(&paths.dir)
-            .spawn()
-            .map_err(|e| format!("open folder: {e}"))?;
+        std::process::Command::new(if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        })
+        .arg(&paths.dir)
+        .spawn()
+        .map_err(|e| format!("open folder: {e}"))?;
     }
     Ok(())
 }
@@ -2076,7 +2179,10 @@ pub async fn author_transcribe_voice(
 
 /// Forward sync server events into a Tauri event channel so the frontend can react
 /// to them (peer connected, new messages, etc.) without polling.
-pub fn spawn_sync_event_forwarder(app: AppHandle, mut rx: tokio::sync::broadcast::Receiver<SyncEvent>) {
+pub fn spawn_sync_event_forwarder(
+    app: AppHandle,
+    mut rx: tokio::sync::broadcast::Receiver<SyncEvent>,
+) {
     tauri::async_runtime::spawn(async move {
         while let Ok(ev) = rx.recv().await {
             let _ = app.emit("sync-event", ev_to_json(&ev));
@@ -2090,7 +2196,9 @@ fn ev_to_json(ev: &SyncEvent) -> serde_json::Value {
             peer,
             pairing_id,
             phone_id,
-        } => serde_json::json!({"kind":"peer-connected","peer":peer,"pairingId":pairing_id,"phoneId":phone_id}),
+        } => {
+            serde_json::json!({"kind":"peer-connected","peer":peer,"pairingId":pairing_id,"phoneId":phone_id})
+        }
         SyncEvent::PeerAuthFailed { peer } => {
             serde_json::json!({"kind":"peer-auth-failed","peer":peer})
         }

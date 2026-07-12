@@ -4,10 +4,20 @@
 
 ### Added
 
+- Desktop can send and receive generic `FILE` messages. Local files are streamed
+  into Core's content-addressed store, synced as opaque blobs, shown with filename
+  and size, and saved with their original display name without routing large files
+  through base64 IPC.
+
 - Desktop sync now inherits Core's mandatory PSK-derived AES-256-GCM transport for
   both inbound and outbound connections. Welcome, events, acknowledgements, errors,
   and media are encrypted with directional keys and replay-safe sequence numbers;
   legacy plaintext peers fail clearly instead of downgrading.
+- Desktop now inherits Core's authenticated endpoint promotion and mDNS anti-flapping
+  policy, so spoofed discovery records cannot replace persisted peer addresses.
+- Desktop now honors an empty/reinstalled peer's full-replay request instead of
+  suppressing history with its cached acknowledgement watermark. Deleted-chat
+  tombstones and the peer's own historical events are replayed during recovery.
 - Enabled the shared Core endpoint-rediscovery behavior for outbound desktop
   peers, allowing paired devices to reconnect after a LAN IP-address change.
 - Added the desktop's configured friendly name to outbound sync handshakes.
@@ -53,8 +63,12 @@
 - Updated the in-app release notes to explain automatic conflict resolution.
 - Updated the in-app release notes to mention pairing-credential safeguards.
 - Updated the in-app release notes to mention encrypted LAN sync traffic.
+- Updated the in-app release notes to mention authenticated discovery changes.
+- Updated the in-app release notes to mention complete reinstall recovery.
 
 ### Verification
 
 - Successfully compiled with `cargo check`.
+- Passed `svelte-check` with zero errors or warnings after adding generic-file
+  send, receive, and save controls.
 - Passed `git diff --check`.

@@ -50,6 +50,13 @@ export type ChecklistItem = {
   checked: boolean;
 };
 
+export type FileAttachment = {
+  file: string;
+  name: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+};
+
 export type Message = {
   id: string;
   chatId: string;
@@ -58,9 +65,10 @@ export type Message = {
   voiceDurationMs: number | null;
   createdAt: number;
   editedAt: number | null;
-  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST";
+  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | "FILE";
   isStarred: boolean;
   imageFiles: string[];
+  fileAttachments: FileAttachment[];
   tags: string[];
   reminderAt: number | null;
   checklistItems: ChecklistItem[];
@@ -236,7 +244,7 @@ export type PairAttempt = {
   outcome: string;
 };
 
-export type MediaType = "voice" | "image";
+export type MediaType = "voice" | "image" | "file";
 
 export const api = {
   listChats: () => invoke<ChatSummary[]>("list_chats"),
@@ -281,6 +289,12 @@ export const api = {
     invoke<void>("author_delete_message", { chatId, messageId }),
   authorSendImage: (chatId: string, sourcePath: string, replyToId: string | null = null) =>
     invoke<void>("author_send_image", { chatId, sourcePath, replyToId }),
+  authorSendFile: (
+    chatId: string,
+    sourcePath: string,
+    displayName: string,
+    replyToId: string | null = null,
+  ) => invoke<void>("author_send_file", { chatId, sourcePath, displayName, replyToId }),
   authorSendVoice: (
     chatId: string,
     bytesB64: string,
@@ -327,6 +341,10 @@ export const api = {
   // Phase 2b — content-addressed media blobs.
   readBlob: (hash: string, mediaType: MediaType) =>
     invoke<string | null>("read_blob", { hash, mediaType }),
+  blobExists: (hash: string, mediaType: MediaType) =>
+    invoke<boolean>("blob_exists", { hash, mediaType }),
+  saveBlob: (hash: string, mediaType: MediaType, dest: string) =>
+    invoke<void>("save_blob", { hash, mediaType, dest }),
 
   // Image viewer. `imageView` sniffs the real format — nothing records it, and
   // every stored image is labelled `.jpg` whatever it actually is.

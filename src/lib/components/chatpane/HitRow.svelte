@@ -3,7 +3,7 @@
   import RichText from "../RichText.svelte";
   import Avatar from "../Avatar.svelte";
   import { formatFullTime } from "../../format";
-  import { Mic, Image as ImageIcon } from "@lucide/svelte";
+  import { Mic, Image as ImageIcon, Paperclip } from "@lucide/svelte";
 
   // A single message hit — avatar + chat name + time header, then a compact
   // rendering of the message content. The whole card is one clickable button so
@@ -34,6 +34,8 @@
             <span class="check-item">{item.checked ? "☑" : "☐"} {item.text}</span>
           {/each}
         </span>
+      {:else if message.type === "FILE"}
+        <span class="media-chip"><Paperclip size={13} strokeWidth={2.25} /> {message.fileAttachments[0]?.name ?? "File"}</span>
       {:else}
         <span class="media-chip"><ImageIcon size={13} strokeWidth={2.25} /> Image</span>
       {/if}

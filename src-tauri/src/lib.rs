@@ -297,9 +297,8 @@ pub fn run() {
                 "stopped"
             }));
             let server_addr = Arc::new(RwLock::new(None::<String>));
-            let pairing_registry: PairingRegistry = Arc::new(tokio::sync::Mutex::new(
-                std::collections::HashMap::new(),
-            ));
+            let pairing_registry: PairingRegistry =
+                Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
             let pair_security = PairSecurityState::new(settings.discoverable);
             let pairings = Arc::new(RwLock::new(pairings));
 
@@ -445,6 +444,7 @@ pub fn run() {
             commands::author_edit_text,
             commands::author_delete_message,
             commands::author_send_image,
+            commands::author_send_file,
             commands::author_send_voice,
             commands::author_send_checklist,
             commands::author_set_reminder,
@@ -457,6 +457,8 @@ pub fn run() {
             commands::author_update_chat_meta,
             commands::author_delete_chat,
             commands::read_blob,
+            commands::blob_exists,
+            commands::save_blob,
             commands::image_view,
             commands::save_image,
             commands::copy_image,

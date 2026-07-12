@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Message } from "../ipc";
+  import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { api, extractMediaHash } from "../ipc";
   import {
     arrivedBlobs,
@@ -26,6 +27,8 @@
     Star,
     Trash2,
     X,
+    Paperclip,
+    Download,
   } from "@lucide/svelte";
 
   let {
@@ -298,6 +301,8 @@
 
   const voiceHash = $derived(extractMediaHash(message.voiceFile));
   const imageHash = $derived(extractMediaHash(firstImageRef(message)));
+  const fileAttachment = $derived(message.fileAttachments?.[0] ?? null);
+  const fileHash = $derived(extractMediaHash(fileAttachment?.file ?? null));
 
   let voiceDataUrl = $state<string | null>(null);
   let voiceMissing = $state(false);
@@ -307,6 +312,8 @@
   let voiceMetadataDuration = $state<number | null>(null);
   let imageDataUrl = $state<string | null>(null);
   let imageMissing = $state(false);
+  let fileAvailable = $state(false);
+  let fileSaving = $state(false);
 
   const voiceDurationSeconds = $derived(
     voiceMetadataDuration ?? (message.voiceDurationMs ?? 0) / 1000,
@@ -407,6 +414,39 @@
       })
       .catch((e) => console.error("readBlob image", e));
   });
+
+  $effect(() => {
+    const arrived = $arrivedBlobs;
+    const h = fileHash;
+    if (!h) {
+      fileAvailable = false;
+      return;
+    }
+    void arrived;
+    api.blobExists(h, "file").then((exists) => (fileAvailable = exists))
+      .catch((e) => console.error("blobExists file", e));
+  });
+
+  function formatFileSize(bytes: number | null | undefined): string {
+    if (bytes == null) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function downloadFile() {
+    if (!fileHash || !fileAttachment || !fileAvailable || fileSaving) return;
+    fileSaving = true;
+    try {
+      const safeName = fileAttachment.name.replace(/[\\/:*?"<>|]/g, "_") || "file";
+      const dest = await saveDialog({ defaultPath: safeName });
+      if (dest) await api.saveBlob(fileHash, "file", dest);
+    } catch (e) {
+      console.error("save file", e);
+    } finally {
+      fileSaving = false;
+    }
+  }
 </script>
 
 <div
@@ -589,6 +629,25 @@
           <ImageIcon size={14} strokeWidth={2.25} />
           <span>Image (legacy reference, not transferable)</span>
         </div>
+      {/if}
+    {:else if message.type === "FILE"}
+      {#if fileAttachment}
+        <button
+          type="button"
+          class="file-card"
+          disabled={!fileAvailable || fileSaving}
+          onclick={() => void downloadFile()}
+          title={fileAvailable ? "Save file" : "Downloading file"}
+        >
+          <Paperclip size={20} strokeWidth={2.1} />
+          <span class="file-info">
+            <strong>{fileAttachment.name}</strong>
+            <small>{formatFileSize(fileAttachment.sizeBytes)}{fileAvailable ? "" : " · downloading…"}</small>
+          </span>
+          <Download size={17} strokeWidth={2.1} />
+        </button>
+      {:else}
+        <div class="row muted tiny"><Paperclip size={14} /><span>File</span></div>
       {/if}
     {:else if editing}
       <div class="edit">
@@ -959,6 +1018,23 @@
     line-height: 1;
   }
   .voice .icon { display: inline-flex; align-items: center; line-height: 0; }
+  .file-card {
+    display: flex;
+    align-items: center;
+    gap: .55rem;
+    width: min(310px, 65vw);
+    padding: .55rem .65rem;
+    color: inherit;
+    text-align: left;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+    border-radius: 10px;
+  }
+  .file-card:not(:disabled) { cursor: pointer; }
+  .file-card:disabled { opacity: .7; }
+  .file-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
+  .file-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-info small { opacity: .72; }
   .voice-player {
     display: flex;
     align-items: center;

@@ -75,13 +75,16 @@ export function formatMessageTime(ms: number | null | undefined): string {
  * {@link replyPreviewText} to get a label for those.
  */
 export function messagePreview(m: {
-  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST";
+  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | "FILE";
   content: { spans: { text: string }[] }[];
   checklistItems: { text: string; checked: boolean }[];
   transcript: string | null;
+  fileAttachments: { name: string }[];
 }): string {
   let text: string;
-  if (m.type === "CHECKLIST") {
+  if (m.type === "FILE") {
+    text = m.fileAttachments[0]?.name ?? "File";
+  } else if (m.type === "CHECKLIST") {
     const done = m.checklistItems.filter((i) => i.checked).length;
     const first = m.checklistItems[0]?.text ?? "";
     text = `${done}/${m.checklistItems.length} ${first}`;
@@ -100,7 +103,7 @@ export function messagePreview(m: {
  */
 export function replyPreviewText(
   preview: string | null,
-  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | null,
+  type: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | "FILE" | null,
 ): string {
   if (preview && preview.trim()) return preview;
   switch (type) {
@@ -110,6 +113,8 @@ export function replyPreviewText(
       return "Photo";
     case "CHECKLIST":
       return "Checklist";
+    case "FILE":
+      return "File";
     default:
       return "Message";
   }

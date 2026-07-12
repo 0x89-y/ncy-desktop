@@ -16,7 +16,7 @@
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
   import {
     Plus, ListChecks, Pin, Lock, Unlock,
-    MoreHorizontal, MessageSquare, Mic, Square,
+    MoreHorizontal, MessageSquare, Mic, Square, Paperclip,
   } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
@@ -700,6 +700,30 @@
       sending = false;
     }
   }
+
+  async function attachFile() {
+    const c = $activeChat;
+    if (!c || sending) return;
+    let picked: string | string[] | null;
+    try {
+      picked = await openDialog({ multiple: false, directory: false });
+    } catch (e: any) {
+      sendError = typeof e === "string" ? e : (e?.message ?? "could not open picker");
+      return;
+    }
+    const path = Array.isArray(picked) ? picked[0] : picked;
+    if (!path) return;
+    const displayName = path.split(/[\\/]/).pop() || "File";
+    sending = true;
+    sendError = null;
+    try {
+      await api.authorSendFile(c.metadata.id, path, displayName, consumeReplyId());
+    } catch (e: any) {
+      sendError = typeof e === "string" ? e : (e?.message ?? "file send failed");
+    } finally {
+      sending = false;
+    }
+  }
 </script>
 
 {#if $activeChat}
@@ -939,6 +963,16 @@
             disabled={sending}
           >
             <Plus size={18} strokeWidth={2.25} />
+          </button>
+          <button
+            type="button"
+            class="attach"
+            title="Attach file"
+            aria-label="Attach file"
+            onclick={attachFile}
+            disabled={sending}
+          >
+            <Paperclip size={18} strokeWidth={2.25} />
           </button>
           <button
             type="button"
