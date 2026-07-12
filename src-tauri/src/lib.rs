@@ -320,6 +320,7 @@ pub fn run() {
                 server_addr: server_addr.clone(),
                 pairing_registry: pairing_registry.clone(),
                 pair_security: pair_security.clone(),
+                active_peers: Default::default(),
             });
 
             // The outbound-peer supervisor's deps (desktop↔desktop client role).

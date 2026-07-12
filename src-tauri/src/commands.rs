@@ -7,8 +7,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::model::event::op_type;
 use crate::model::{BlockType, ChatMetadata, Message, MessageType, RichTextBlock, RichTextSpan};
 use crate::storage::{
-    materialize, now_ms, save_pairings, save_peers, AppSettings, EventStore, MaterializedChat,
-    OutboundPeer, Pairing,
+    materialize, now_ms, reset_sync_watermarks, save_pairings, save_peers, AppSettings,
+    EventStore, MaterializedChat, OutboundPeer, Pairing,
 };
 use crate::sync::{author_event, SyncEvent};
 use crate::AppState;
@@ -1783,75 +1783,139 @@ pub async fn import_backup(
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("not a valid backup zip: {e}"))?;
 
-    let mut chat_files: std::collections::HashSet<String> = Default::default();
-    let mut touched: std::collections::HashSet<String> = Default::default();
-    let mut events_added = 0usize;
-    let mut blobs_added = 0usize;
-
+    // Validate every event clock before stopping sync or mutating local state.
+    // Re-open entries by index during the import pass below.
+    let import_now = now_ms();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-        if entry.is_dir() {
+        let name = entry.name().to_string();
+        let Some(fname) = name.strip_prefix("events/") else {
+            continue;
+        };
+        if entry.is_dir() || !fname.ends_with(".ndjson") || fname.contains('/') {
             continue;
         }
-        let name = entry.name().to_string();
-        if let Some(fname) = name.strip_prefix("events/") {
-            if !fname.ends_with(".ndjson") || fname.contains('/') {
+        let mut buf = String::new();
+        entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+        for line in buf.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            if let Ok(wire) =
+                serde_json::from_str::<crate::model::event::ChatEventWire>(line)
+            {
+                if !wire.hlc.is_acceptable_remote(import_now) {
+                    return Err(
+                        "backup contains an invalid or future-skewed event clock".to_string()
+                    );
+                }
+            }
+        }
+    }
+
+    // Restoring events invalidates every local statement of sync progress. Stop
+    // live sessions, persist cleared watermarks before touching event state, and
+    // restart in all success/error paths. A crash during import therefore also
+    // restarts safely from zero on the next application launch.
+    let restart_sync = state.sync_shutdown.lock().unwrap().is_some();
+    if restart_sync {
+        crate::apply_sync_enabled(state.inner(), false).await;
+    }
+    let reset_result: Result<(), String> = {
+        let mut pairings = state.pairings.write().await;
+        let mut peers = state.peers.write().await;
+        let cleared = reset_sync_watermarks(&mut pairings, &mut peers);
+        if cleared == 0 {
+            Ok(())
+        } else {
+            save_pairings(&state.paths.pairings, &pairings)
+                .map_err(|e| e.to_string())
+                .and_then(|_| save_peers(&state.paths.peers, &peers).map_err(|e| e.to_string()))
+        }
+    };
+    if let Err(error) = reset_result {
+        if restart_sync {
+            crate::apply_sync_enabled(state.inner(), true).await;
+        }
+        return Err(error);
+    }
+
+    let result = (|| -> Result<ImportSummary, String> {
+        let mut chat_files: std::collections::HashSet<String> = Default::default();
+        let mut touched: std::collections::HashSet<String> = Default::default();
+        let mut events_added = 0usize;
+        let mut blobs_added = 0usize;
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
+            if entry.is_dir() {
                 continue;
             }
-            chat_files.insert(fname.to_string());
-            let mut buf = String::new();
-            entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
-            for line in buf.lines() {
-                let line = line.trim();
-                if line.is_empty() {
+            let name = entry.name().to_string();
+            if let Some(fname) = name.strip_prefix("events/") {
+                if !fname.ends_with(".ndjson") || fname.contains('/') {
                     continue;
                 }
-                if let Ok(wire) =
-                    serde_json::from_str::<crate::model::event::ChatEventWire>(line)
-                {
-                    state.clock.receive(&wire.hlc, now_ms());
-                    if state.events.append(&wire).unwrap_or(false) {
-                        events_added += 1;
-                        touched.insert(wire.chat_id.clone());
+                chat_files.insert(fname.to_string());
+                let mut buf = String::new();
+                entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
+                for line in buf.lines() {
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Ok(wire) =
+                        serde_json::from_str::<crate::model::event::ChatEventWire>(line)
+                    {
+                        state.clock.receive(&wire.hlc, now_ms());
+                        if state.events.append(&wire).unwrap_or(false) {
+                            events_added += 1;
+                            touched.insert(wire.chat_id.clone());
+                        }
                     }
                 }
-            }
-        } else if let Some(fname) = name.strip_prefix("blobs/") {
-            // Content-addressed flat names only — reject anything path-ish.
-            if fname.is_empty() || fname.contains('/') || fname.contains('\\') || fname.contains("..")
-            {
-                continue;
-            }
-            let dest = state.blobs.root().join(fname);
-            if dest.exists() {
-                continue;
-            }
-            let mut bytes = Vec::new();
-            entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            if std::fs::write(&dest, &bytes).is_ok() {
-                blobs_added += 1;
-            }
-        }
-    }
-
-    // Protected-chat catch-up parity, and nudge the UI to re-materialize.
-    for cid in &touched {
-        if let Ok(evs) = state.events.read_chat(cid) {
-            if let Some(scrubbed) = crate::sync::scrub_superseded(&evs) {
-                let _ = state.events.replace_chat(cid, &scrubbed);
+            } else if let Some(fname) = name.strip_prefix("blobs/") {
+                // Content-addressed flat names only — reject anything path-ish.
+                if fname.is_empty()
+                    || fname.contains('/')
+                    || fname.contains('\\')
+                    || fname.contains("..")
+                {
+                    continue;
+                }
+                let dest = state.blobs.root().join(fname);
+                if dest.exists() {
+                    continue;
+                }
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                if std::fs::write(&dest, &bytes).is_ok() {
+                    blobs_added += 1;
+                }
             }
         }
-        let _ = state.bus.send(SyncEvent::EventReceived {
-            chat_id: cid.clone(),
-            event_id: String::new(),
-        });
-    }
 
-    Ok(ImportSummary {
-        chats: chat_files.len(),
-        events: events_added,
-        blobs: blobs_added,
-    })
+        // Protected-chat catch-up parity, and nudge the UI to re-materialize.
+        for cid in &touched {
+            if let Ok(evs) = state.events.read_chat(cid) {
+                if let Some(scrubbed) = crate::sync::scrub_superseded(&evs) {
+                    let _ = state.events.replace_chat(cid, &scrubbed);
+                }
+            }
+            let _ = state.bus.send(SyncEvent::EventReceived {
+                chat_id: cid.clone(),
+                event_id: String::new(),
+            });
+        }
+
+        Ok(ImportSummary {
+            chats: chat_files.len(),
+            events: events_added,
+            blobs: blobs_added,
+        })
+    })();
+
+    if restart_sync {
+        crate::apply_sync_enabled(state.inner(), true).await;
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,18 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.6.2",
+    date: "2026-07-11",
+    changes: [
+      "Backup restore now safely replays sync state without stale progress markers.",
+      "Sync now detects cloned or mismatched device identities.",
+      "Events created during initial catch-up are now delivered without gaps.",
+      "Concurrent edits, deletes, profiles, and protected chats now resolve consistently.",
+      "Pairing credentials now have clearer warnings and short clipboard lifetimes.",
+      "Messages and media are now encrypted while syncing across the local network.",
+    ],
+  },
+  {
     version: "0.6.1",
     date: "2026-07-11",
     changes: [

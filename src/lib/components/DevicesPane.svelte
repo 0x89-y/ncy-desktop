@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+  import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { api, type PairAttempt } from "../ipc";
   import {
     pairings,
@@ -62,6 +62,13 @@
     await writeText(text);
     copyHint = hint;
     setTimeout(() => (copyHint = null), 1200);
+    setTimeout(async () => {
+      try {
+        if ((await readText()) === text) await writeText("");
+      } catch {
+        // Clipboard permission may change while the timer is pending.
+      }
+    }, 60_000);
   }
 
   async function pickHost(ip: string) {
@@ -81,11 +88,17 @@
 
   async function addDesktop() {
     if (peerBusy || !peerJson.trim()) return;
+    const submitted = peerJson.trim();
     peerBusy = true;
     peerError = null;
     try {
-      await api.addPeer(peerJson.trim());
+      await api.addPeer(submitted);
       peerJson = "";
+      try {
+        if ((await readText()).trim() === submitted) await writeText("");
+      } catch {
+        // Pairing succeeded; clipboard cleanup is best-effort.
+      }
       await refreshPeers();
     } catch (e: any) {
       peerError = typeof e === "string" ? e : (e?.message ?? "could not add peer");
@@ -176,6 +189,9 @@
               rows="3"
               aria-label="Pairing JSON"
             ></textarea>
+            <span class="tiny danger">
+              Pairing JSON is a credential; do not save or share copied values.
+            </span>
             {#if peerError}
               <div class="tiny err">{peerError}</div>
             {/if}
@@ -269,6 +285,9 @@
                 </div>
                 <div class="col json-box" style="flex:1; min-width:0;">
                   <code class="json-pre">{p.payloadJson}</code>
+                  <span class="tiny danger">
+                    Contains a pairing credential. Copied JSON clears after 60 seconds if unchanged.
+                  </span>
                   <div class="row">
                     <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
                       Copy JSON
@@ -450,6 +469,7 @@
     flex-shrink: 0;
   }
   .dot.paired { background: var(--success, #34a853); }
+  .danger { color: var(--danger); }
   /* Compact icon-only action button (the X remove). Overrides the global
      accent-pill button default. */
   .icon-btn {
