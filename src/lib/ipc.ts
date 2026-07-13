@@ -87,6 +87,7 @@ export type Message = {
   replyToPreview: string | null;
   replyToType: "TEXT" | "VOICE" | "IMAGE" | "CHECKLIST" | null;
   replyToCreatedAt: number | null;
+  authorDeviceId: string | null;
 };
 
 export type ChatMetadata = {
@@ -102,6 +103,7 @@ export type ChatMetadata = {
   tags: string[];
   isProtected: boolean;
   hideName: boolean;
+  remoteMessagesOnLeft: boolean;
 };
 
 export type MaterializedChat = {
@@ -328,7 +330,7 @@ export const api = {
     invoke<void>("author_toggle_checklist_item", { chatId, messageId, itemId }),
   authorUpdateChatMeta: (
     chatId: string,
-    patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[] },
+    patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[]; remoteMessagesOnLeft?: boolean },
   ) =>
     invoke<void>("author_update_chat_meta", {
       chatId,
@@ -336,6 +338,7 @@ export const api = {
       isPinned: patch.isPinned ?? null,
       isArchived: patch.isArchived ?? null,
       tags: patch.tags ?? null,
+      remoteMessagesOnLeft: patch.remoteMessagesOnLeft ?? null,
     }),
   authorCreateChat: (name: string) =>
     invoke<string>("author_create_chat", { name }),
@@ -369,6 +372,7 @@ export const api = {
     invoke<{ chats: number; events: number; blobs: number }>("import_backup", {
       srcPath,
     }),
+  purgeChatTombstones: () => invoke<number>("purge_chat_tombstones"),
 
   // Phase 3 — protected-chat unlock. `unlockChat` returns false on a wrong PIN.
   unlockChat: (chatId: string, pin: string) =>

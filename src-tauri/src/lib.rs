@@ -458,6 +458,7 @@ pub fn run() {
             commands::copy_image,
             commands::export_backup,
             commands::import_backup,
+            commands::purge_chat_tombstones,
             commands::unlock_chat,
             commands::lock_chat,
             commands::protect_chat,

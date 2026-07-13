@@ -4,6 +4,20 @@
 
 ### Added
 
+- Incoming bubbles now use a stable, theme-aware color derived from their originating
+  device. Android and Desktop use the same mapping without adding synchronized color state.
+
+- Added **Other devices on left** to each chat's options. Messages authored by another
+  installation use an incoming bubble style; local and unknown legacy messages remain
+  on the right. Desktop authors and preserves the shared creator metadata through edits.
+
+- Desktop inherits Core's stricter compaction behavior: unknown future operations
+  are retained, and exact chat tombstones remain load-bearing against stale restores.
+  Time or current-peer acknowledgement alone never authorizes tombstone deletion.
+- Desktop backups now carry Core's compact deletion graveyard and restore it before
+  stale chat events. Backup settings include an advanced, strongly warned action to
+  forget those records when the user accepts the resurrection risk.
+
 - Desktop can send and receive generic `FILE` messages. Local files are streamed
   into Core's content-addressed store, synced as opaque blobs, shown with filename
   and size, and saved with their original display name without routing large files

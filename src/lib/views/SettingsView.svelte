@@ -349,6 +349,15 @@
       backupBusy = false;
     }
   }
+
+  async function purgeTombstones() {
+    if (!confirm(
+      "Only continue if every old device and backup containing deleted chats is gone. " +
+      "A stale device paired later can restore those chats. This cannot be undone."
+    )) return;
+    const removed = await api.purgeChatTombstones();
+    backupMsg = `Forgot ${removed} deleted-chat record${removed === 1 ? "" : "s"}.`;
+  }
 </script>
 
 <div class="page-scroll scroll settings">
@@ -744,6 +753,15 @@
         </span>
         <button class="ghost backup-row-button" onclick={doImport} disabled={backupBusy}>
           {backupBusy ? "Working…" : "Import"}
+        </button>
+      </div>
+      <div class="opt-row backup-action-row">
+        <span class="opt-label backup-action-label">
+          <span class="backup-action-title">Forget deleted-chat records</span>
+          <span class="inline-hint">Advanced: stale backups may restore deleted chats afterward.</span>
+        </span>
+        <button class="ghost backup-row-button danger" onclick={purgeTombstones} disabled={backupBusy}>
+          Forget
         </button>
       </div>
       {#if backupMsg}

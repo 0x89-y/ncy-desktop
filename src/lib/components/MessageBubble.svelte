@@ -39,6 +39,7 @@
     onJumpToReplyTarget,
     replyTargetExists = false,
     highlighted = false,
+    isRemote = false,
   }: {
     message: Message;
     bubbleColor: string | null;
@@ -49,6 +50,7 @@
     replyTargetExists?: boolean;
     /** Briefly tinted after a jump landed on this message. */
     highlighted?: boolean;
+    isRemote?: boolean;
   } = $props();
 
   const quoteText = $derived(replyPreviewText(message.replyToPreview, message.replyToType));
@@ -61,7 +63,17 @@
     message.tags.length === 1 && message.tags[0].length <= 16 ? message.tags[0] : null,
   );
 
+  function remoteDeviceColor(deviceId: string | null | undefined): string {
+    let hash = 0;
+    const id = deviceId ?? "";
+    for (let i = 0; i < id.length; i += 1) {
+      hash = Math.imul(hash, 31) + id.charCodeAt(i);
+    }
+    return `hsl(${(hash >>> 0) % 360} 65% 52%)`;
+  }
+
   const bubbleStyle = $derived.by(() => {
+    if (isRemote) return `--remote-device-color:${remoteDeviceColor(message.authorDeviceId)}`;
     if (!bubbleColor) return "";
     if (bubbleGradient) {
       return `background:linear-gradient(135deg, ${bubbleColor}, color-mix(in oklab, ${bubbleColor} 60%, var(--bubble-mine)))`;
@@ -453,6 +465,7 @@
   class="row-wrap"
   class:compact={$messageDensity === "compact"}
   class:highlighted
+  class:remote={isRemote}
   data-mid={message.id}
   onmouseenter={showHoverStripSoon}
   onmouseleave={hideHoverStrip}
@@ -484,6 +497,7 @@
   <div
     class="bubble"
     class:compact={$messageDensity === "compact"}
+    class:remote={isRemote}
     style={bubbleStyle}
     role="group"
     oncontextmenu={openCtx}
@@ -847,6 +861,8 @@
   .row-wrap.compact {
     margin-bottom: .22rem;
   }
+  .row-wrap.remote { align-items: flex-start; }
+  .row-wrap.remote .hover-strip { left: 8px; right: auto; }
   /* Flash after a jump-to-original lands here. Fades on its own; the timer in
      ChatView clears the flag afterwards. */
   .row-wrap.highlighted .bubble {
@@ -973,6 +989,15 @@
     border-radius: 14px 14px 4px 14px;
     padding: .34rem .58rem;
   }
+  .bubble.remote {
+    --bubble-mine: var(--surface-2);
+    --bubble-mine-on: var(--text);
+    background: color-mix(in oklab, var(--remote-device-color) 24%, var(--surface));
+    color: var(--text);
+    border: 1px solid color-mix(in oklab, var(--remote-device-color) 38%, var(--border));
+    border-radius: 18px 18px 18px 4px;
+  }
+  .bubble.remote.compact { border-radius: 14px 14px 14px 4px; }
   .meta {
     margin-top: .2rem;
     gap: .35rem;

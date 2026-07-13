@@ -1074,6 +1074,7 @@ pub async fn author_send_text(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
@@ -1240,6 +1241,7 @@ pub async fn author_send_checklist(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
@@ -1284,6 +1286,7 @@ pub async fn author_create_chat(
         is_protected: false,
         hide_name: false,
         protection_salt: None,
+        remote_messages_on_left: false,
     };
     let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
     author_event(
@@ -1313,6 +1316,7 @@ pub async fn author_update_chat_meta(
     is_pinned: Option<bool>,
     is_archived: Option<bool>,
     tags: Option<Vec<String>>,
+    remote_messages_on_left: Option<bool>,
 ) -> Result<(), String> {
     let mut meta = current_metadata(&state.events, &chat_id)?;
     if let Some(n) = name {
@@ -1334,6 +1338,9 @@ pub async fn author_update_chat_meta(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
+    }
+    if let Some(enabled) = remote_messages_on_left {
+        meta.remote_messages_on_left = enabled;
     }
     let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
     author_event(
@@ -1557,6 +1564,7 @@ pub async fn author_send_message(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
@@ -1609,6 +1617,7 @@ pub async fn author_send_voice(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     let id = msg.id.clone();
@@ -1667,6 +1676,7 @@ pub async fn author_send_image(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
         image_files: vec![],
         file_attachments: vec![],
         tags: vec![],
@@ -1728,6 +1738,7 @@ pub async fn author_send_file(
         reply_to_preview: None,
         reply_to_type: None,
         reply_to_created_at: None,
+        author_device_id: Some(state.identity_device_id.clone()),
     };
     let msg = attach_reply(state.inner(), &chat_id, msg, reply_to_id);
     author_message(state.inner(), &chat_id, op_type::MESSAGE_CREATED, &msg)
@@ -1930,6 +1941,14 @@ pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Res
 
     copy_dir(&state.paths.events, "events", true)?;
     copy_dir(state.blobs.root(), "blobs", false)?;
+    drop(copy_dir);
+    let graveyard = state.paths.events.join("chat-tombstones.graveyard");
+    if graveyard.is_file() {
+        zip.start_file("events/chat-tombstones.graveyard", opts)
+            .map_err(|e| e.to_string())?;
+        zip.write_all(&std::fs::read(graveyard).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1956,7 +1975,10 @@ pub async fn import_backup(
         let Some(fname) = name.strip_prefix("events/") else {
             continue;
         };
-        if entry.is_dir() || !fname.ends_with(".ndjson") || fname.contains('/') {
+        if entry.is_dir()
+            || (!fname.ends_with(".ndjson") && fname != "chat-tombstones.graveyard")
+            || fname.contains('/')
+        {
             continue;
         }
         let mut buf = String::new();
@@ -2012,10 +2034,14 @@ pub async fn import_backup(
             }
             let name = entry.name().to_string();
             if let Some(fname) = name.strip_prefix("events/") {
-                if !fname.ends_with(".ndjson") || fname.contains('/') {
+                if (!fname.ends_with(".ndjson") && fname != "chat-tombstones.graveyard")
+                    || fname.contains('/')
+                {
                     continue;
                 }
-                chat_files.insert(fname.to_string());
+                if fname != "chat-tombstones.graveyard" {
+                    chat_files.insert(fname.to_string());
+                }
                 let mut buf = String::new();
                 entry.read_to_string(&mut buf).map_err(|e| e.to_string())?;
                 for line in buf.lines() {
@@ -2027,7 +2053,12 @@ pub async fn import_backup(
                         serde_json::from_str::<crate::model::event::ChatEventWire>(line)
                     {
                         state.clock.receive(&wire.hlc, now_ms());
-                        if state.events.append(&wire).unwrap_or(false) {
+                        let added = if fname == "chat-tombstones.graveyard" {
+                            state.events.archive_chat_tombstone(&wire).unwrap_or(false)
+                        } else {
+                            state.events.append(&wire).unwrap_or(false)
+                        };
+                        if added {
                             events_added += 1;
                             touched.insert(wire.chat_id.clone());
                         }
@@ -2078,6 +2109,11 @@ pub async fn import_backup(
         crate::apply_sync_enabled(state.inner(), true).await;
     }
     result
+}
+
+#[tauri::command]
+pub async fn purge_chat_tombstones(state: State<'_, AppState>) -> Result<usize, String> {
+    state.events.purge_chat_tombstones().map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

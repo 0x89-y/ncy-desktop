@@ -5,6 +5,7 @@
     refreshChats,
     selectChat,
     settings,
+    identity,
     markTranscribing,
     unmarkTranscribing,
     setTranscriptionError,
@@ -390,6 +391,7 @@
     isPinned?: boolean;
     isArchived?: boolean;
     tags?: string[];
+    remoteMessagesOnLeft?: boolean;
   }) {
     const c = $activeChat;
     if (!c || metaBusy) return;
@@ -772,6 +774,13 @@
               {chat.metadata.isArchived ? "Unarchive" : "Archive"}
             </button>
             <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
+            <button
+              type="button"
+              onclick={() => {
+                menuOpen = false;
+                void runMeta({ remoteMessagesOnLeft: !chat.metadata.remoteMessagesOnLeft });
+              }}
+            >{chat.metadata.remoteMessagesOnLeft ? "Keep all messages on right" : "Other devices on left"}</button>
             <button type="button" onclick={setAvatar}>
               {chat.metadata.avatarFile ? "Change avatar…" : "Set avatar…"}
             </button>
@@ -896,6 +905,7 @@
           message={m}
           bubbleColor={chat.metadata.bubbleColor}
           bubbleGradient={chat.metadata.bubbleGradient}
+          isRemote={chat.metadata.remoteMessagesOnLeft && !!m.authorDeviceId && m.authorDeviceId !== $identity?.deviceId}
           onReply={startReply}
           onJumpToReplyTarget={jumpToMessage}
           replyTargetExists={!!m.replyToId && messageIds.has(m.replyToId)}
