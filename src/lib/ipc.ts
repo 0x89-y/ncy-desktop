@@ -137,20 +137,28 @@ export type PairingDescriptor = {
 export type PeerView = {
   id: string;
   label: string;
+  authenticatedName: string | null;
   host: string;
   port: number;
   foregroundOnly: boolean;
   enabled: boolean;
   createdAt: number;
   lastSeenAt: number | null;
+  lastDiscoveredAt: number | null;
+  lastAuthenticatedAt: number | null;
+  lastAuthenticatedHost: string | null;
+  lastAuthenticatedPort: number | null;
+  lastError: string | null;
+  nextRetryAt: number | null;
 };
 
 export type AppSettings = {
   port: number;
   deviceName: string;
   theme: string;
-  /** When false (default), the desktop does not advertise over mDNS — it stays
-   *  invisible to network scanners. Pairing still works via QR / pasted JSON. */
+  /** When false (default), the desktop does not advertise over mDNS. Pairing still
+   *  works via QR / pasted JSON, but paired clients cannot recover automatically
+   *  after this desktop's LAN address changes. */
   discoverable: boolean;
   /** One of "purple" / "blue" / "green" / "pink" / "orange" / "teal" — drives
    *  the `[data-accent='…']` CSS preset applied to `document.documentElement`. */
@@ -254,6 +262,7 @@ export const api = {
   createPairing: (label: string) =>
     invoke<PairingDescriptor>("create_pairing", { label }),
   deletePairing: (id: string) => invoke<void>("delete_pairing", { id }),
+  rotatePairing: (id: string) => invoke<PairingDescriptor>("rotate_pairing", { id }),
   addPeer: (payloadJson: string) =>
     invoke<void>("add_peer", { payloadJson }),
   listPeers: () => invoke<PeerView[]>("list_peers"),

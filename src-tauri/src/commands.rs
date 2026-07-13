@@ -399,6 +399,41 @@ pub async fn delete_pairing(state: State<'_, AppState>, id: String) -> Result<()
     save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub async fn rotate_pairing(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<PairingDescriptor, String> {
+    let pairing = {
+        let mut guard = state.pairings.write().await;
+        let pairing = guard
+            .pairings
+            .iter_mut()
+            .find(|pairing| pairing.id == id)
+            .ok_or_else(|| "pairing not found".to_string())?;
+        pairing.rotate_secret();
+        let rotated = pairing.clone();
+        save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())?;
+        rotated
+    };
+    let settings = state.settings.read().await.clone();
+    let host = state.advertised_host.read().await.clone();
+    let payload = PairingPayload {
+        v: 1,
+        device_id: state.identity_device_id.clone(),
+        name: settings.device_name,
+        host,
+        port: settings.port,
+        secret: pairing.secret_b64.clone(),
+    };
+    let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+    Ok(PairingDescriptor {
+        pairing,
+        qr_svg: make_qr_svg(&payload_json),
+        payload_json,
+    })
+}
+
 // ---------- Discovery-initiated pairing (2026-07-07) ----------
 
 /// The frontend has confirmed a pending pair request. Generate a fresh
@@ -498,6 +533,8 @@ struct IncomingPairing {
 pub struct PeerView {
     pub id: String,
     pub label: String,
+    #[serde(rename = "authenticatedName")]
+    pub authenticated_name: Option<String>,
     pub host: String,
     pub port: u16,
     #[serde(rename = "foregroundOnly")]
@@ -507,6 +544,18 @@ pub struct PeerView {
     pub created_at: i64,
     #[serde(rename = "lastSeenAt")]
     pub last_seen_at: Option<i64>,
+    #[serde(rename = "lastDiscoveredAt")]
+    pub last_discovered_at: Option<i64>,
+    #[serde(rename = "lastAuthenticatedAt")]
+    pub last_authenticated_at: Option<i64>,
+    #[serde(rename = "lastAuthenticatedHost")]
+    pub last_authenticated_host: Option<String>,
+    #[serde(rename = "lastAuthenticatedPort")]
+    pub last_authenticated_port: Option<u16>,
+    #[serde(rename = "lastError")]
+    pub last_error: Option<String>,
+    #[serde(rename = "nextRetryAt")]
+    pub next_retry_at: Option<i64>,
 }
 
 /// Add another desktop as an outbound sync peer by pasting *its* pairing JSON
@@ -534,6 +583,7 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
     guard.peers.push(OutboundPeer {
         id: p.device_id,
         label,
+        authenticated_name: (!p.name.trim().is_empty()).then_some(p.name),
         host: p.host,
         port: p.port,
         availability: p.availability,
@@ -541,6 +591,12 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
         secret_b64: p.secret,
         created_at: now_ms(),
         last_seen_at: None,
+        last_discovered_at: None,
+        last_authenticated_at: None,
+        last_authenticated_host: None,
+        last_authenticated_port: None,
+        last_error: None,
+        next_retry_at: None,
         last_sent_hlc: None,
         last_received_hlc: None,
     });
@@ -559,12 +615,19 @@ pub async fn list_peers(state: State<'_, AppState>) -> Result<Vec<PeerView>, Str
         .map(|p| PeerView {
             id: p.id.clone(),
             label: p.label.clone(),
+            authenticated_name: p.authenticated_name.clone(),
             host: p.host.clone(),
             port: p.port,
             foreground_only: p.availability.as_deref() == Some("foreground"),
             enabled: !p.disabled,
             created_at: p.created_at,
             last_seen_at: p.last_seen_at,
+            last_discovered_at: p.last_discovered_at,
+            last_authenticated_at: p.last_authenticated_at,
+            last_authenticated_host: p.last_authenticated_host.clone(),
+            last_authenticated_port: p.last_authenticated_port,
+            last_error: p.last_error.clone(),
+            next_retry_at: p.next_retry_at,
         })
         .collect())
 }
@@ -621,8 +684,8 @@ pub async fn update_settings(
     *state.pair_security.discoverable.write().await = settings.discoverable;
 
     // Reconcile mDNS advertising with the new `discoverable` setting — effective
-    // immediately, no restart. When on, re-announce (drop + recreate) so a changed
-    // device name is picked up too. Advertise the port the server actually bound
+    // immediately, no restart. When on, re-announce (drop + recreate) using the
+    // privacy-preserving stable-ID label. Advertise the port the server actually bound
     // (a port change still needs a restart) so we never advertise a dead port.
     // With the sync stack switched off there is nothing to advertise at all.
     let sync_running = state.sync_shutdown.lock().unwrap().is_some();
@@ -635,7 +698,7 @@ pub async fn update_settings(
             .and_then(|a| a.rsplit(':').next())
             .and_then(|p| p.parse::<u16>().ok())
             .unwrap_or(settings.port);
-        crate::announce_mdns(&state, &settings, bound_port).await;
+        crate::announce_mdns(&state, bound_port).await;
     } else {
         // Drop the registration → mdns-sd unregisters the service.
         *state.mdns.lock().unwrap() = None;

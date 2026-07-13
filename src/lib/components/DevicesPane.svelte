@@ -1,6 +1,6 @@
 <script lang="ts">
   import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
-  import { api, type PairAttempt } from "../ipc";
+  import { api, type PairAttempt, type PairingDescriptor } from "../ipc";
   import {
     pairings,
     refreshPairings,
@@ -31,12 +31,40 @@
   let showConnectionDetails = $state(false);
   let showManualPairing = $state(false);
   let showRecentRequests = $state(false);
+  const duplicateDeviceNames = $derived.by(() => {
+    const counts = new Map<string, number>();
+    const add = (name: string | null) => {
+      const key = deviceNameKey(name);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    };
+    for (const descriptor of $pairings) {
+      if (descriptor.pairing.phoneId) add(descriptor.pairing.phoneName);
+    }
+    for (const peer of $peers) add(peer.authenticatedName || peer.label);
+    return new Set([...counts].filter(([, count]) => count > 1).map(([key]) => key));
+  });
+
+  function deviceNameKey(name: string | null): string {
+    return (name ?? "").trim().toLowerCase();
+  }
+
+  function duplicateDeviceName(name: string | null): boolean {
+    return duplicateDeviceNames.has(deviceNameKey(name));
+  }
+
+  function shortDeviceFingerprint(deviceId: string): string {
+    return deviceId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "unknown";
+  }
   // Per-pairing "Show pairing info" toggle. Claimed pairings hide the QR + JSON
   // by default (they're only needed for the first pairing handshake); the user
   // can reveal them here if they need to re-pair a lost phone from scratch.
   let revealed = $state<Record<string, boolean>>({});
+  let diagnostics = $state<Record<string, boolean>>({});
   function toggleReveal(id: string) {
     revealed = { ...revealed, [id]: !revealed[id] };
+  }
+  function toggleDiagnostics(id: string) {
+    diagnostics = { ...diagnostics, [id]: !diagnostics[id] };
   }
 
   async function create() {
@@ -53,8 +81,19 @@
   }
 
   async function remove(id: string) {
-    if (!confirm("Remove this pairing? The phone will need to re-pair.")) return;
+    if (!confirm("Revoke and remove this pairing? The affected device will disconnect and must pair again. Chats remain unchanged.")) return;
     await api.deletePairing(id);
+    await refreshPairings();
+  }
+
+  async function rotate(pairing: PairingDescriptor["pairing"]) {
+    const affected = pairing.phoneName || pairing.label;
+    const message = pairing.phoneId
+      ? `Rotate the credential for ${affected}? It will disconnect and must pair again. The pairing slot and chats remain.`
+      : "Replace this unused invitation? Any previously copied QR/JSON will stop working.";
+    if (!confirm(message)) return;
+    await api.rotatePairing(pairing.id);
+    revealed = { ...revealed, [pairing.id]: true };
     await refreshPairings();
   }
 
@@ -156,6 +195,9 @@
     const days = Math.floor(delta / 86_400_000);
     return `${days}d ago`;
   }
+  function isPairingRepairError(message: string | undefined): boolean {
+    return message?.includes("Pairing credential was revoked or changed") ?? false;
+  }
   onMount(refreshPairAttempts);
 </script>
 
@@ -204,10 +246,19 @@
         {/if}
         {#if showConnectionDetails}
           <div class="network-details">
+            <p class="tiny muted network-note">
+              Public and guest Wi-Fi may isolate devices or block multicast discovery even when
+              both show the same network name. Ncy does not scan the subnet; use a private LAN or
+              hotspot if paired devices remain offline.
+            </p>
             <label class="opt-row embedded-row">
               <span class="opt-label">
                 Discoverable on local network
-                <span class="inline-hint">QR and JSON still work when off.</span>
+                <span class="inline-hint">
+                  {discoverable
+                    ? "On with a private ID label — paired devices can find this desktop again after its IP address changes."
+                    : "Off — QR/JSON pairing still works, but automatic recovery after an IP address change does not."}
+                </span>
               </span>
               <span class="switch">
                 <input
@@ -218,6 +269,12 @@
                 <span class="slider"></span>
               </span>
             </label>
+            {#if !discoverable}
+              <p class="tiny danger network-note">
+                If this desktop's LAN address changes, paired devices keep trying the old address
+                until discovery is enabled again or their pairing endpoint is updated manually.
+              </p>
+            {/if}
             <div class="field">
               <span class="field-label">Sync address</span>
               {#if $serverAddr}
@@ -259,6 +316,13 @@
                   <strong>{p.pairing.label}</strong>
                 </div>
                 <span class="muted tiny">
+                  {#if claimed}
+                    Device {p.pairing.phoneName || "Unnamed device"}
+                    {#if duplicateDeviceName(p.pairing.phoneName)}
+                      · ID {shortDeviceFingerprint(p.pairing.phoneId!)}
+                    {/if}
+                    ·
+                  {/if}
                   Created {formatFullTime(p.pairing.createdAt)}
                   {#if p.pairing.lastSeenAt} · last seen {formatFullTime(p.pairing.lastSeenAt)}{/if}
                 </span>
@@ -269,16 +333,24 @@
                     {showBox ? "Hide" : "Show more"}
                   </button>
                 {/if}
+                <button class="ghost" onclick={() => rotate(p.pairing)}>
+                  {claimed ? "Rotate credential" : "Replace code"}
+                </button>
                 <button
                   class="icon-btn"
                   onclick={() => remove(p.pairing.id)}
-                  title="Remove pairing"
-                  aria-label="Remove pairing"
+                  title="Revoke and remove pairing"
+                  aria-label="Revoke and remove pairing"
                 ><X size={15} strokeWidth={2.25} /></button>
               </div>
             </div>
 
             {#if showBox}
+              <p class="tiny muted">
+                {claimed
+                  ? "Rotating disconnects this device and replaces its secret; chats remain, but the device must scan the new code."
+                  : "Replacing this invitation invalidates every previously copied version of this QR/JSON."}
+              </p>
               <div class="row qrbox">
                 <div class="qr" aria-label="Pairing QR">
                   {@html p.qrSvg}
@@ -302,6 +374,7 @@
 
         {#each $peers as p (p.id)}
           {@const online = p.enabled && $connectedPeers.has(p.id)}
+          {@const deviceName = p.authenticatedName || p.label}
           <div class="panel peer-card">
             <div class="col" style="flex:1; min-width:0;">
               <div class="row" style="gap:.45rem">
@@ -313,12 +386,46 @@
                 <strong>{p.label}</strong>
               </div>
               <span class="muted tiny">
+                {#if p.authenticatedName && p.authenticatedName !== p.label}
+                  Device {p.authenticatedName} ·
+                {/if}
+                {#if duplicateDeviceName(deviceName)}
+                  Device ID {shortDeviceFingerprint(p.id)} ·
+                {/if}
                 {p.host}:{p.port}
                 {#if p.lastSeenAt} · last seen {formatFullTime(p.lastSeenAt)}{/if}
                 {#if !p.enabled} · automatic sync paused
                 {:else if !online && p.foregroundOnly} · open Ncy and enable phone sync there{/if}
                 {#if p.enabled && $peerErrors[p.id]} · {$peerErrors[p.id]}{/if}
               </span>
+              {#if p.enabled && !online && isPairingRepairError($peerErrors[p.id])}
+                <span class="tiny err">
+                  Automatic retries are stopped because this is a trust failure. Remove the peer and pair again.
+                </span>
+              {:else if p.enabled && !online && $peerErrors[p.id]}
+                <span class="muted tiny">
+                  If both devices are running, the network may block direct device traffic. Try a private LAN or hotspot.
+                </span>
+              {/if}
+              <button class="ghost compact" onclick={() => toggleDiagnostics(p.id)}>
+                {diagnostics[p.id] ? "Hide diagnostics" : "Show diagnostics"}
+              </button>
+              {#if diagnostics[p.id]}
+                <div class="col tiny muted" style="gap:.15rem">
+                  <span>Last discovery: {p.lastDiscoveredAt ? formatFullTime(p.lastDiscoveredAt) : "never"}</span>
+                  <span>
+                    Last authenticated: {p.lastAuthenticatedAt ? formatFullTime(p.lastAuthenticatedAt) : "never"}
+                    {#if p.lastAuthenticatedHost && p.lastAuthenticatedPort}
+                      at {p.lastAuthenticatedHost}:{p.lastAuthenticatedPort}
+                    {/if}
+                  </span>
+                  <span>
+                    Retry: {!p.enabled ? "paused by user" : online ? "not retrying" : p.nextRetryAt ? `scheduled ${formatFullTime(p.nextRetryAt)}` : isPairingRepairError($peerErrors[p.id]) ? "stopped until re-pairing" : "not scheduled"}
+                  </span>
+                  <span>Direct LAN: {online ? "reachable" : ($peerErrors[p.id] || p.lastError) ? "possibly blocked; an offline peer looks the same" : "not currently tested"}</span>
+                  {#if p.lastError}<span class="err">Last error: {p.lastError}</span>{/if}
+                </div>
+              {/if}
             </div>
             <div class="row" style="gap:.3rem">
               <span class="chip" class:active={online}>

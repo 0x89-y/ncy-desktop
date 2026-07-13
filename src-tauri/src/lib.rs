@@ -134,7 +134,7 @@ pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
 
         // The listener hasn't bound yet, so advertise the configured port.
         if settings.discoverable {
-            announce_mdns(state, &settings, settings.port).await;
+            announce_mdns(state, settings.port).await;
         }
     } else {
         let handle = state.sync_shutdown.lock().unwrap().take();
@@ -152,19 +152,13 @@ pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
     }
 }
 
-/// (Re-)announce this desktop over mDNS-SD, replacing any live registration so a
-/// changed device name is picked up. Failures are logged, not fatal — manual
+/// (Re-)announce this desktop over mDNS-SD using a privacy label derived from its
+/// random installation ID, never its human device name. Failures are logged, not fatal — manual
 /// QR/paste pairing works without discovery.
-pub async fn announce_mdns(state: &AppState, settings: &AppSettings, port: u16) {
+pub async fn announce_mdns(state: &AppState, port: u16) {
     let host = state.advertised_host.read().await.clone();
     let mut guard = state.mdns.lock().unwrap();
-    match MdnsRegistration::announce(
-        &settings.device_name,
-        &host,
-        port,
-        &state.identity_device_id,
-        "request",
-    ) {
+    match MdnsRegistration::announce(&host, port, &state.identity_device_id, "request") {
         Ok(reg) => *guard = Some(reg),
         Err(e) => {
             tracing::warn!("mDNS announce failed: {e}");
@@ -273,7 +267,6 @@ pub fn run() {
             // settings starts/stops this at runtime (see `update_settings`).
             let mdns = if sync_enabled && settings.discoverable {
                 MdnsRegistration::announce(
-                    &settings.device_name,
                     &advertised_host,
                     settings.port,
                     &identity.device_id,
@@ -424,6 +417,7 @@ pub fn run() {
             commands::list_pairings,
             commands::create_pairing,
             commands::delete_pairing,
+            commands::rotate_pairing,
             commands::add_peer,
             commands::list_peers,
             commands::set_peer_enabled,

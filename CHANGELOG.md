@@ -8,6 +8,29 @@
   into Core's content-addressed store, synced as opaque blobs, shown with filename
   and size, and saved with their original display name without routing large files
   through base64 IPC.
+- Device settings now explain guest-network client isolation and multicast
+  filtering, clarify that Ncy does not scan the subnet, and show a private-LAN or
+  hotspot suggestion beside failed peer connections.
+- The discoverability toggle now states its address-recovery effect in both states
+  and warns that disabling it leaves paired devices on the old endpoint after DHCP
+  changes until discovery is restored or the endpoint is repaired manually.
+- Desktop mDNS advertisements now use a short random installation-ID label instead
+  of broadcasting the configured device name or operating-system hostname. Pairing
+  payloads and direct peer handshakes retain the friendly name.
+- Paired-device cards can now rotate a credential in place or revoke/remove it with
+  an affected-device confirmation. Rotation keeps the slot/label and chats, clears
+  the former owner/watermark, publishes a new QR, and promptly disconnects the old
+  session. Rejected outbound credentials stop retrying and request re-pairing.
+- Paired-device cards now show the authenticated phone name for claimed inbound
+  slots and append a stable eight-character device-ID fingerprint when inbound or
+  outbound names collide case-insensitively. Unique names remain unchanged.
+- Outbound device names now refresh from Core's encrypted authenticated `Welcome`;
+  claimed inbound phone names refresh from authenticated `Hello`. User-assigned
+  pairing-slot labels and outbound aliases remain separate and unchanged; only a
+  system-derived label that followed the previous authenticated name is refreshed.
+- Outbound peer cards now expose last discovery, last authenticated endpoint/time,
+  retry scheduling, last error, and an honest reachable/possibly-blocked LAN status.
+  Diagnostics reuse passive discovery and existing connections without extra probes.
 
 - Desktop sync now inherits Core's mandatory PSK-derived AES-256-GCM transport for
   both inbound and outbound connections. Welcome, events, acknowledgements, errors,
@@ -71,4 +94,6 @@
 - Successfully compiled with `cargo check`.
 - Passed `svelte-check` with zero errors or warnings after adding generic-file
   send, receive, and save controls.
+- Passed `svelte-check` with zero errors and zero warnings after duplicate-name
+  disambiguation was added.
 - Passed `git diff --check`.
