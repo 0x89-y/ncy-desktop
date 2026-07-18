@@ -4,6 +4,10 @@
 
 ### Added
 
+- Desktop now inherits Core's compact restart-safe message-deletion ledger. Portable
+  backups reconstruct its normal tombstone events, stale bodies cannot trigger blob
+  downloads, and **Forget deletion records** now warns about chats and messages.
+
 - Incoming bubbles now use a stable, theme-aware color derived from their originating
   device. Android and Desktop use the same mapping without adding synchronized color state.
 
@@ -105,6 +109,8 @@
 
 ### Verification
 
+- Successfully compiled the compact message-tombstone backup/purge integration with
+  `cargo check`; `svelte-check` reports zero errors and zero warnings.
 - Successfully compiled with `cargo check`.
 - Passed `svelte-check` with zero errors or warnings after adding generic-file
   send, receive, and save controls.

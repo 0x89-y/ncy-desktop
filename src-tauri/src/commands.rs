@@ -1949,6 +1949,22 @@ pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Res
         zip.write_all(&std::fs::read(graveyard).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
     }
+    let message_tombstones = state
+        .events
+        .read_all_message_graveyard()
+        .map_err(|e| e.to_string())?;
+    if !message_tombstones.is_empty() {
+        zip.start_file("events/message-tombstones.ndjson", opts)
+            .map_err(|e| e.to_string())?;
+        for event in message_tombstones {
+            writeln!(
+                zip,
+                "{}",
+                serde_json::to_string(&event).map_err(|e| e.to_string())?
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2039,7 +2055,7 @@ pub async fn import_backup(
                 {
                     continue;
                 }
-                if fname != "chat-tombstones.graveyard" {
+                if fname != "chat-tombstones.graveyard" && fname != "message-tombstones.ndjson" {
                     chat_files.insert(fname.to_string());
                 }
                 let mut buf = String::new();
@@ -2113,7 +2129,7 @@ pub async fn import_backup(
 
 #[tauri::command]
 pub async fn purge_chat_tombstones(state: State<'_, AppState>) -> Result<usize, String> {
-    state.events.purge_chat_tombstones().map_err(|e| e.to_string())
+    state.events.purge_tombstones().map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
