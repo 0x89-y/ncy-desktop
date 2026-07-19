@@ -25,6 +25,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "The Windows installer now includes its version-pinned Pear runtime.",
       "The desktop executable can now run as a foreground CLI client with sync, status, peer, and pairing commands.",
       "The desktop executable can also run the existing isolated server daemon and administration commands.",
+      "Running server mode now accepts pairing and diagnostic commands directly in its log terminal.",
     ],
   },
   {

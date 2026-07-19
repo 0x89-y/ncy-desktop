@@ -75,6 +75,9 @@ Server mode retains the standalone server's config format and defaults to
 the GUI/CLI client. In an installed desktop build, Pear-enabled server configs
 may omit `pear_runtime_path` and `pear_bundle_path`; the packaged, version-matched
 runtime is used automatically. Explicit config paths continue to override it.
+While server mode is running interactively, type `help` in that same terminal.
+Commands include `pair My Phone`, `pairings`, `peers`, `rotate <id>`,
+`revoke <id>`, and `stop`; pairing changes become active without restarting.
 
 ## Build a release
 

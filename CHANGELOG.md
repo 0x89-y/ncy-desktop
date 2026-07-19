@@ -12,6 +12,8 @@
   inspection, and JSON pairing commands using the existing desktop profile.
 - Added an integrated server mode that retains the standalone server configuration and
   isolated identity while reusing the desktop installation's bundled Pear runtime.
+- Added interactive server commands and live pairing reload, allowing devices to be paired
+  from the running server's log terminal without restarting it.
 
 ### Packaging
 
