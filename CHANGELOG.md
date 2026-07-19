@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — 2026-07-19
+
+### Added
+
+- Added optional Pear synchronization for already-paired devices on different networks.
+- Added Local only, Pear only, Local preferred, and Pear preferred routing policies, with
+  Pear off by default and explicit consent before it starts.
+- Added Pear public keys to QR/JSON pairing and accepted Pear-capable peer payloads.
+
+### Packaging
+
+- The Windows x64 NSIS installer now includes its version-pinned Bare runtime, worker
+  bundle, and native addons using LZMA compression.
+- Preserved the existing Ncy application identity and local data across the upgrade.
+
 ## Unreleased — 2026-07-11
 
 ### Added
