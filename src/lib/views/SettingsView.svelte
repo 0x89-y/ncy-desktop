@@ -57,6 +57,7 @@
   let accent = $state("purple");
   let discoverable = $state(false);
   let transcriptionEnabled = $state(false);
+  let syncTransportMode = $state<AppSettings["syncTransportMode"]>("localOnly");
   let desktopPrefs = $state<DesktopPrefs>({
     startMinimized: false,
     closeToTray: false,
@@ -103,6 +104,7 @@
       accent = $settings.accent ?? "purple";
       discoverable = $settings.discoverable;
       transcriptionEnabled = $settings.transcriptionEnabled ?? false;
+      syncTransportMode = $settings.syncTransportMode ?? "localOnly";
       dirty = false;
     }
   });
@@ -112,7 +114,23 @@
   }
 
   function settingsPayload(): AppSettings {
-    return { port, deviceName, theme, discoverable, accent, transcriptionEnabled };
+    return { port, deviceName, theme, discoverable, accent, transcriptionEnabled, syncTransportMode };
+  }
+
+  function changeTransportMode(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const next = select.value as AppSettings["syncTransportMode"];
+    if (next !== "localOnly" && syncTransportMode === "localOnly") {
+      const accepted = confirm(
+        "Enable Pear networking? Ncy will start a bundled peer-to-peer networking process and contact the Pear/Holepunch discovery infrastructure so your paired devices can connect over the internet. Chat contents remain end-to-end protected by Ncy's existing pairing credentials.",
+      );
+      if (!accepted) {
+        select.value = syncTransportMode;
+        return;
+      }
+    }
+    syncTransportMode = next;
+    markDirty();
   }
 
   async function persistSettings() {
@@ -486,6 +504,18 @@
   <section class="group">
     <h2>This device</h2>
     <div class="opt-list">
+      <label class="field">
+        <span class="field-label">Connection method</span>
+        <select value={syncTransportMode} onchange={changeTransportMode}>
+          <option value="localOnly">Local only</option>
+          <option value="pearOnly">Pear only</option>
+          <option value="localPreferred">Local preferred</option>
+          <option value="pearPreferred">Pear preferred</option>
+        </select>
+        <span class="tiny muted">
+          Local stays on your current network. Pear can connect already-paired devices across networks; it never discovers or pairs unknown devices.
+        </span>
+      </label>
       <label class="field">
         <span class="field-label">Device name</span>
         <div class="row device-name-row">

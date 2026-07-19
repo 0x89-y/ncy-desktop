@@ -168,6 +168,8 @@ export type AppSettings = {
   /** When true, voice messages are auto-transcribed via a local whisper.cpp
    *  install. Off by default (opt-in — needs the model + CLI installed first). */
   transcriptionEnabled: boolean;
+  /** Connection routing policy. Pear is opt-in; fresh installs use localOnly. */
+  syncTransportMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
 };
 
 export type DesktopPrefs = {

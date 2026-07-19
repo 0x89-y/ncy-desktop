@@ -228,6 +228,8 @@ pub struct PairingPayload {
     pub host: String,
     pub port: u16,
     pub secret: String,
+    #[serde(rename = "pearPublicKey", skip_serializing_if = "Option::is_none")]
+    pub pear_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -342,6 +344,7 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
     let identity_device_id = state.identity_device_id.clone();
     let identity_name = settings.device_name.clone();
     let host = state.advertised_host.read().await.clone();
+    let pear_public_key = state.pear_public_key.read().await.clone();
     let mut out = Vec::new();
     for p in pairings.pairings.iter() {
         let payload = PairingPayload {
@@ -351,6 +354,7 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
             host: host.clone(),
             port: settings.port,
             secret: p.secret_b64.clone(),
+            pear_public_key: pear_public_key.clone(),
         };
         let payload_json = serde_json::to_string(&payload).unwrap_or_default();
         let qr_svg = make_qr_svg(&payload_json);
@@ -376,6 +380,7 @@ pub async fn create_pairing(
     }
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
+    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -383,6 +388,7 @@ pub async fn create_pairing(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
+        pear_public_key,
     };
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     let qr_svg = make_qr_svg(&payload_json);
@@ -419,6 +425,7 @@ pub async fn rotate_pairing(
     };
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
+    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -426,6 +433,7 @@ pub async fn rotate_pairing(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
+        pear_public_key,
     };
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     Ok(PairingDescriptor {
@@ -470,6 +478,7 @@ pub async fn pair_accept(
     }
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
+    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -477,6 +486,7 @@ pub async fn pair_accept(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
+        pear_public_key,
     };
     let pairing_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
@@ -691,6 +701,18 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
+    let sync_running = state.sync_shutdown.lock().unwrap().is_some();
+    if sync_running {
+        crate::apply_pear_mode(&state, settings.sync_transport_mode)
+            .await
+            .map_err(|error| format!("could not enable Pear: {error}"))?;
+    } else {
+        *state.transport_mode.write().await = settings.sync_transport_mode;
+        crate::apply_pear_mode(&state, crate::sync::SyncTransportMode::LocalOnly)
+            .await
+            .map_err(|error| error.to_string())?;
+        *state.transport_mode.write().await = settings.sync_transport_mode;
+    }
     crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
     *state.settings.write().await = settings.clone();
 
@@ -704,7 +726,6 @@ pub async fn update_settings(
     // privacy-preserving stable-ID label. Advertise the port the server actually bound
     // (a port change still needs a restart) so we never advertise a dead port.
     // With the sync stack switched off there is nothing to advertise at all.
-    let sync_running = state.sync_shutdown.lock().unwrap().is_some();
     if settings.discoverable && sync_running {
         let bound_port = state
             .server_addr
