@@ -8,6 +8,8 @@
 - Added Local only, Pear only, Local preferred, and Pear preferred routing policies, with
   Pear off by default and explicit consent before it starts.
 - Added Pear public keys to QR/JSON pairing and accepted Pear-capable peer payloads.
+- Added a headless desktop client with foreground and timed sync modes, status and peer
+  inspection, and JSON pairing commands using the existing desktop profile.
 
 ### Packaging
 

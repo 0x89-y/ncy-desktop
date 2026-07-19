@@ -30,6 +30,32 @@ npm run tauri:dev
 The first build pulls a lot of Rust crates and takes a few minutes. Subsequent
 runs are fast.
 
+## Headless client
+
+The desktop executable can run the same client profile without opening Tauri or
+creating a window. `--no-gui` is an alias for the long-running client mode:
+
+```powershell
+ncy-desktop.exe --no-gui
+ncy-desktop.exe client run
+ncy-desktop.exe client status
+ncy-desktop.exe client peers
+ncy-desktop.exe client sync --seconds 30
+ncy-desktop.exe client pair create --name "My phone"
+ncy-desktop.exe client pair add --file pairing.json
+```
+
+`run` stays in the foreground until Ctrl+C. `sync` runs the normal local/Pear
+client stack for a bounded window (15 seconds by default), while `status` and
+`peers` only inspect the profile. Pairing JSON printed by `pair create` can be
+turned into a QR code or imported directly on another Ncy device.
+
+The GUI and CLI deliberately share `%APPDATA%\com.ncy.desktop\ncy`: identity,
+settings, notes, pairings, and sync watermarks are the same. Do not run them at
+the same time; the first version does not yet coordinate concurrent profile
+ownership. `NCY_DATA_DIR` may point development and automated tests at an
+isolated profile.
+
 ## Build a release
 
 Releases are signed so the in-app updater will accept them. Generate the signing
@@ -108,6 +134,7 @@ src-tauri/                       # Rust + Tauri
 ├── src/
 │   ├── lib.rs                   # entrypoint, AppState, plugins, tray, command reg
 │   ├── main.rs
+│   ├── cli.rs                   # headless client commands and foreground runtime
 │   ├── commands.rs              # Tauri commands (list/get, author_*, unlock_chat, …)
 │   ├── network.rs               # LAN IP detection
 │   ├── model/                   # wire-shape data types (event, hlc, message, …)

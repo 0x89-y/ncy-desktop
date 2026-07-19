@@ -23,6 +23,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Pairing codes can now include a Pear identity for first-time pairing across networks.",
       "Pear remains off by default and starts only after explicit consent.",
       "The Windows installer now includes its version-pinned Pear runtime.",
+      "The desktop executable can now run as a foreground CLI client with sync, status, peer, and pairing commands.",
     ],
   },
   {
