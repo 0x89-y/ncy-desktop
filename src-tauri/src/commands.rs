@@ -12,6 +12,7 @@ use crate::storage::{
     materialize, now_ms, reset_sync_watermarks, save_pairings, save_peers, AppSettings, EventStore,
     MaterializedChat, OutboundPeer, Pairing,
 };
+use crate::sync::pear::valid_public_key;
 use crate::sync::{author_event, SyncEvent};
 use crate::AppState;
 
@@ -525,6 +526,8 @@ struct IncomingPairing {
     host: String,
     port: u16,
     secret: String,
+    #[serde(default, rename = "pearPublicKey")]
+    pear_public_key: Option<String>,
     #[serde(default)]
     availability: Option<String>,
 }
@@ -537,6 +540,8 @@ pub struct PeerView {
     pub authenticated_name: Option<String>,
     pub host: String,
     pub port: u16,
+    #[serde(rename = "pearPublicKey")]
+    pub pear_public_key: Option<String>,
     #[serde(rename = "foregroundOnly")]
     pub foreground_only: bool,
     pub enabled: bool,
@@ -568,8 +573,17 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
     if p.device_id == state.identity_device_id {
         return Err("that's this device's own pairing — paste another desktop's".into());
     }
-    if p.host.trim().is_empty() || p.secret.trim().is_empty() {
-        return Err("pairing JSON is missing host or secret".into());
+    if p.secret.trim().is_empty() {
+        return Err("pairing JSON is missing its secret".into());
+    }
+    if p.pear_public_key
+        .as_deref()
+        .is_some_and(|key| !valid_public_key(key))
+    {
+        return Err("pairing JSON contains an invalid Pear public key".into());
+    }
+    if p.host.trim().is_empty() && p.pear_public_key.is_none() {
+        return Err("pairing JSON has neither a LAN endpoint nor a Pear public key".into());
     }
     let mut guard = state.peers.write().await;
     if guard.peers.iter().any(|e| e.id == p.device_id) {
@@ -586,6 +600,7 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
         authenticated_name: (!p.name.trim().is_empty()).then_some(p.name),
         host: p.host,
         port: p.port,
+        pear_public_key: p.pear_public_key,
         availability: p.availability,
         disabled: false,
         secret_b64: p.secret,
@@ -618,6 +633,7 @@ pub async fn list_peers(state: State<'_, AppState>) -> Result<Vec<PeerView>, Str
             authenticated_name: p.authenticated_name.clone(),
             host: p.host.clone(),
             port: p.port,
+            pear_public_key: p.pear_public_key.clone(),
             foreground_only: p.availability.as_deref() == Some("foreground"),
             enabled: !p.disabled,
             created_at: p.created_at,
