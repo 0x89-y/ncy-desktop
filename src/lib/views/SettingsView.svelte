@@ -813,6 +813,18 @@
         <span class="opt-label">Source</span>
         <a href="https://github.com/0x89-y" target="_blank" rel="noreferrer noopener">github.com/0x89-y</a>
       </div>
+      <div class="opt-row">
+        <span class="opt-label">
+          Pear open-source components
+          <span class="inline-hint">Bare/Bare Kit and UDX · Apache-2.0; Hyperswarm, HyperDHT, and sodium-native · MIT.</span>
+        </span>
+      </div>
+      <div class="opt-row">
+        <span class="opt-label">
+          Third-party notices
+          <span class="inline-hint">A detailed Apache-2.0, MIT, and ISC dependency inventory and the supplied license and notice texts are installed with the Pear runtime.</span>
+        </span>
+      </div>
     </div>
   </section>
 

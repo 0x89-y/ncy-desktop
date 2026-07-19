@@ -57,7 +57,9 @@ publish-release.bat  :: stages release\ with the installer + latest.json
 
 The release build first regenerates the Pear worker, then bundles only the Windows x64
 Bare runtime, worker bundle, and required Windows x64 native addons. NSIS uses LZMA
-compression. Development builds continue to resolve the same sibling checkout directly.
+compression. It also regenerates and packages `pear-sidecar/THIRD_PARTY_NOTICES.md` from
+the locked production dependency tree. Development builds continue to resolve the same
+sibling checkout directly.
 
 `publish-release.bat` renames the installer to the stable URL the updater points
 at and writes `latest.json` with the signature already inlined. Upload both files
