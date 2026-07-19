@@ -30,13 +30,23 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "resources": {
+      "../../ncy-core/pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe": "pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe",
+      "../../ncy-core/pear-sidecar/out/ncy-pear-sidecar.bundle": "pear-sidecar/out/ncy-pear-sidecar.bundle",
+      "../../ncy-core/pear-sidecar/out/node_modules": "pear-sidecar/out/node_modules"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "compression": "lzma"
+      }
+    }
   },
   "plugins": {
     "updater": {

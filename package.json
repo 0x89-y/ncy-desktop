@@ -8,9 +8,10 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "pear:build": "npm --prefix ../ncy-core/pear-sidecar run make",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "npm run pear:build && tauri build"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

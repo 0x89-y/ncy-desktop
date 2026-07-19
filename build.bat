@@ -33,6 +33,16 @@ rem Tauri's build script caches the exe/window icon and misses icon-only
 rem changes, so bump tauri.conf.json's timestamp to force the icon to re-embed.
 powershell -NoProfile -Command "(Get-Item 'src-tauri\tauri.conf.json').LastWriteTime = Get-Date" >nul 2>&1
 
+rem Rebuild the packaged Windows x64 Pear worker before Tauri collects its
+rem runtime, bundle, and native addons as release resources.
+call npm run pear:build
+if not "%ERRORLEVEL%"=="0" (
+    echo PEAR WORKER BUILD FAILED
+    echo Run npm ci in ..\ncy-core\pear-sidecar and retry.
+    pause
+    exit /b 1
+)
+
 call npm run tauri build -- --bundles nsis
 set "ERR=%ERRORLEVEL%"
 

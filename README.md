@@ -2,21 +2,18 @@
 
 Desktop client for [Ncy](https://github.com/0x89-y/Ncy), the Android "note-to-self"
 chat app. Implements the full Ncy sync protocol — **bidirectional**, near-real-time,
-peer-to-peer over the LAN via WebSocket + HMAC-SHA256 challenge/response. The phone
-and desktop talk directly.
+peer-to-peer over LAN WebSockets or the optional Pear transport, with the same
+authenticated and encrypted Ncy sync protocol on either route.
 
 Stack: **Tauri 2** (Rust backend) + **Svelte 5** + **TypeScript** (web frontend).
-
-## Limitations
-
-Sync runs over the LAN only — there's no off-LAN relay, so both devices must be
-on the same network.
 
 ## Prerequisites
 
 - Node.js 18+ and npm
 - Rust stable + WebView2 (the Windows Tauri dependency, preinstalled on Win10/11),
   per the Tauri docs: <https://v2.tauri.app/start/prerequisites/>
+- A sibling `../ncy-core` checkout with `pear-sidecar` dependencies installed:
+  `npm ci --prefix ../ncy-core/pear-sidecar`
 
 **Platform support:** built and tested on **Windows** only. The codebase is
 platform-portable (Tauri 2, no platform-specific code), so it *should* build on
@@ -57,6 +54,10 @@ publish-release.bat  :: stages release\ with the installer + latest.json
 
 - `ncy-desktop.exe` — standalone binary (needs WebView2, preinstalled on Win10/11)
 - `bundle/nsis/Ncy_<version>_x64-setup.exe` — installer, plus its `.sig`
+
+The release build first regenerates the Pear worker, then bundles only the Windows x64
+Bare runtime, worker bundle, and required Windows x64 native addons. NSIS uses LZMA
+compression. Development builds continue to resolve the same sibling checkout directly.
 
 `publish-release.bat` renames the installer to the stable URL the updater points
 at and writes `latest.json` with the signature already inlined. Upload both files
