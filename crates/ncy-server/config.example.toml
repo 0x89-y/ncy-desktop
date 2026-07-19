@@ -1,0 +1,47 @@
+# ncy-server configuration.
+#
+# Copy to your config path and edit. Default config path:
+#   Linux/macOS : /etc/ncy-server/config.toml
+#   Windows     : %APPDATA%\ncy-server\config.toml
+# Or pass an explicit path with `--config /path/to/config.toml`.
+#
+# Only runtime *config* lives here. Runtime *state* (device identity, pairings,
+# outbound peers, the event log, media blobs) is stored as files under `data_dir`.
+
+# Human-readable label the phone shows for this peer.
+device_name = "Ncy NAS"
+
+# TCP port the WebSocket sync server binds (on 0.0.0.0).
+port = 8765
+
+# Root for all runtime state. Must be writable by the service user.
+#   Linux default : /var/lib/ncy-server
+#   Windows       : use a forward-slash path, e.g. "C:/ncy-server/data"
+data_dir = "/var/lib/ncy-server"
+
+# Where whisper-cli + the ggml model live. Defaults to <data_dir>/whisper when
+# omitted. Only needed if transcription_enabled = true.
+# whisper_dir = "/var/lib/ncy-server/whisper"
+
+# Advertise over mDNS (_ncy-sync._tcp.local.) so phones can discover this peer
+# without typing its IP and paired clients can recover after DHCP changes its
+# address. Off by default; QR/paste pairing still works, but automatic address
+# recovery does not. When on, the LAN-visible service uses a random-ID label,
+# never device_name or the OS hostname. Prefer stable DNS/IP when leaving it off.
+discoverable = false
+
+# Auto-transcribe inbound voice messages with whisper-cli. Even when true, the
+# loop only runs if whisper-cli AND ggml-tiny.bin are present in whisper_dir;
+# otherwise the server logs a warning and runs as a pure relay.
+transcription_enabled = false
+
+# Sync transport policy: "localOnly" (default), "pearOnly",
+# "localPreferred", or "pearPreferred". Pear connects only devices that were
+# already paired via QR/JSON; it does not discover unknown Ncy devices.
+sync_transport_mode = "localOnly"
+
+# Required only when a Pear-enabled policy is selected. Point these at the
+# packaged Bare runtime and Ncy Pear bundle. Keep the bundle's adjacent
+# out/node_modules directory intact because it contains native addons.
+# pear_runtime_path = "C:/ncy-server/pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe"
+# pear_bundle_path = "C:/ncy-server/pear-sidecar/out/ncy-pear-sidecar.bundle"

@@ -14,6 +14,8 @@
   isolated identity while reusing the desktop installation's bundled Pear runtime.
 - Added interactive server commands and live pairing reload, allowing devices to be paired
   from the running server's log terminal without restarting it.
+- Moved the standalone server crate into the Desktop Cargo workspace while retaining its
+  independent binary, configuration, data directory, and deployment files.
 
 ### Packaging
 

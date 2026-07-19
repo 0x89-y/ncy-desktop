@@ -1,0 +1,35 @@
+# systemd unit for ncy-server. Adjust paths/user as needed, then:
+#   sudo cp target/release/ncy-server /usr/local/bin/
+#   sudo cp packaging/ncy-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ncy-server
+#
+# Create the service user + data dir first:
+#   sudo useradd --system --home /var/lib/ncy-server --shell /usr/sbin/nologin ncy
+#   sudo install -d -o ncy -g ncy /var/lib/ncy-server /etc/ncy-server
+
+[Unit]
+Description=Ncy headless sync peer + transcription daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ncy
+Group=ncy
+ExecStart=/usr/local/bin/ncy-server --config /etc/ncy-server/config.toml run
+Restart=on-failure
+RestartSec=5
+# Structured log level (overrides the default "info"):
+Environment=RUST_LOG=info
+
+# Hardening — the daemon only needs to read its config and write its data dir.
+StateDirectory=ncy-server
+ReadWritePaths=/var/lib/ncy-server
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+/target
+*.log
+
+# Runtime state, if the daemon is ever run from the repo dir
+/identity.json
+/pairings.json
+/peers.json
+/events/
+/blobs/
+/whisper/

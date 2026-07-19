@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent for ncy-server (macOS). Edit the paths below, then:
+    cp packaging/one.eveo.ncy-server.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/one.eveo.ncy-server.plist
+  Unload with:
+    launchctl unload ~/Library/LaunchAgents/one.eveo.ncy-server.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>one.eveo.ncy-server</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/ncy-server</string>
+        <string>--config</string>
+        <string>/usr/local/etc/ncy-server/config.toml</string>
+        <string>run</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>info</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/ncy-server.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/ncy-server.err.log</string>
+</dict>
+</plist>

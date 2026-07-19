@@ -1,6 +1,7 @@
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+/target/
 
 # Node / Vite
 node_modules/

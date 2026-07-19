@@ -24,7 +24,7 @@ if not defined VER (
 echo Version: %VER%
 echo.
 
-set "BUNDLE=src-tauri\target\release\bundle\nsis"
+set "BUNDLE=target\release\bundle\nsis"
 set "SETUP=%BUNDLE%\Ncy_%VER%_x64-setup.exe"
 set "SIG=%SETUP%.sig"
 

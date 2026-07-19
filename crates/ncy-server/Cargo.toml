@@ -1,0 +1,26 @@
+[package]
+name = "ncy-server"
+version = "0.7.0"
+description = "Headless Ncy sync peer + voice-transcription daemon"
+authors = ["0x89-y"]
+edition = "2021"
+
+[[bin]]
+name = "ncy-server"
+path = "src/main.rs"
+
+[dependencies]
+# Shared UI-agnostic core (event log, sync engine, storage, transcription).
+# Path dep for local dev; switch to a pinned git dep for CI/release.
+ncy-core = { path = "../../../ncy-core" }
+
+tokio = { version = "1.41", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+hostname = "0.4"
+qrcode = "0.14"

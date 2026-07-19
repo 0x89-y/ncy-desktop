@@ -1,0 +1,4 @@
+[workspace]
+members = ["src-tauri", "crates/ncy-server"]
+resolver = "2"
+

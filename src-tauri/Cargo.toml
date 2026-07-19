@@ -17,7 +17,7 @@ tauri-build = { version = "2.0.3", features = [] }
 # its own crate, shared with the headless `ncy-server`. Path dep for local dev;
 # switch to a pinned git dep for CI/release.
 ncy-core = { path = "../../ncy-core" }
-ncy-server = { path = "../../ncy-server" }
+ncy-server = { path = "../crates/ncy-server" }
 
 tauri = { version = "2.1.1", features = ["tray-icon"] }
 tauri-plugin-clipboard-manager = "2.0.1"

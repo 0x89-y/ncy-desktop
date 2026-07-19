@@ -99,7 +99,7 @@ build.bat            :: NSIS installer + .sig  (prompts for the key password)
 publish-release.bat  :: stages release\ with the installer + latest.json
 ```
 
-`build.bat` output lands in `src-tauri/target/release/`:
+`build.bat` output lands in `target/release/`:
 
 - `ncy-desktop.exe` — standalone binary (needs WebView2, preinstalled on Win10/11)
 - `bundle/nsis/Ncy_<version>_x64-setup.exe` — installer, plus its `.sig`
@@ -123,8 +123,9 @@ Bump the version in `package.json`, `src-tauri/Cargo.toml` and
 `npm run tauri:build` still works for an unsigned local build, but the resulting
 installer can't be published as an update.
 
-> Note: `target/` gets large (multi-GB) — it's the Rust build cache and is
-> gitignored. `cargo clean` from `src-tauri/` reclaims it (slow next build).
+> Note: `target/` gets large (multi-GB) — it's the shared Rust workspace build
+> cache and is gitignored. `cargo clean` from the repository root reclaims it
+> (slow next build).
 
 ## Storage
 
@@ -166,6 +167,8 @@ src-tauri/                       # Rust + Tauri
 │                                #   outbound author pipeline, protection (crypto +
 │                                #   in-memory key store)
 └── tauri.conf.json
+
+crates/ncy-server/              # standalone server binary + reusable server library
 
 src/                             # Svelte frontend
 ├── App.svelte

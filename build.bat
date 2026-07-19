@@ -56,15 +56,15 @@ if not "%ERR%"=="0" (
 
 echo BUILD OK.
 echo.
-echo   Installer:   src-tauri\target\release\bundle\nsis\
-echo   Signature:   src-tauri\target\release\bundle\nsis\*-setup.exe.sig
-echo   Standalone:  src-tauri\target\release\ncy-desktop.exe
+echo   Installer:   target\release\bundle\nsis\
+echo   Signature:   target\release\bundle\nsis\*-setup.exe.sig
+echo   Standalone:  target\release\ncy-desktop.exe
 echo.
 echo   To publish an update: run publish-release.bat, then upload the staged
 echo   release\ folder to https://0x89-y.xyz/ncy/ .
 echo.
 
 rem Open the installer folder in Explorer
-start "" "src-tauri\target\release"
+start "" "target\release"
 
 pause
