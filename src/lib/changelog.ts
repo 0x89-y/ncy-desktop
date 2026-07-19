@@ -15,6 +15,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.0",
+    date: "2026-07-19",
+    changes: [
+      "Added optional Pear sync for paired devices on different networks.",
+      "Added Local only, Pear only, Local preferred, and Pear preferred connection modes.",
+      "Pairing codes can now include a Pear identity for first-time pairing across networks.",
+      "Pear remains off by default and starts only after explicit consent.",
+      "The Windows installer now includes its version-pinned Pear runtime.",
+    ],
+  },
+  {
     version: "0.6.5",
     date: "2026-07-11",
     changes: [
