@@ -56,6 +56,26 @@ the same time; the first version does not yet coordinate concurrent profile
 ownership. `NCY_DATA_DIR` may point development and automated tests at an
 isolated profile.
 
+## Server mode
+
+The same executable can also run the existing Ncy server daemon and its
+administration commands:
+
+```powershell
+ncy-desktop.exe --server
+ncy-desktop.exe server --config C:\path\to\config.toml run
+ncy-desktop.exe server --config C:\path\to\config.toml pair --name "My phone"
+ncy-desktop.exe server --config C:\path\to\config.toml pairings
+ncy-desktop.exe server --config C:\path\to\config.toml peers
+```
+
+Server mode retains the standalone server's config format and defaults to
+`%APPDATA%\ncy-server\config.toml` with runtime data under
+`%APPDATA%\ncy-server\data`. It therefore has a separate identity and store from
+the GUI/CLI client. In an installed desktop build, Pear-enabled server configs
+may omit `pear_runtime_path` and `pear_bundle_path`; the packaged, version-matched
+runtime is used automatically. Explicit config paths continue to override it.
+
 ## Build a release
 
 Releases are signed so the in-app updater will accept them. Generate the signing

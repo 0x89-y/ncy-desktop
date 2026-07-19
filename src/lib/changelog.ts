@@ -24,6 +24,7 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Pear remains off by default and starts only after explicit consent.",
       "The Windows installer now includes its version-pinned Pear runtime.",
       "The desktop executable can now run as a foreground CLI client with sync, status, peer, and pairing commands.",
+      "The desktop executable can also run the existing isolated server daemon and administration commands.",
     ],
   },
   {

@@ -10,6 +10,8 @@
 - Added Pear public keys to QR/JSON pairing and accepted Pear-capable peer payloads.
 - Added a headless desktop client with foreground and timed sync modes, status and peer
   inspection, and JSON pairing commands using the existing desktop profile.
+- Added an integrated server mode that retains the standalone server configuration and
+  isolated identity while reusing the desktop installation's bundled Pear runtime.
 
 ### Packaging
 
