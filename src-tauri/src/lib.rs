@@ -87,8 +87,8 @@ pub struct AppState {
 /// just as firing it does.
 pub struct SyncHandle {
     shutdown: broadcast::Sender<()>,
-    server: tokio::task::JoinHandle<()>,
-    peers: tokio::task::JoinHandle<()>,
+    server: tauri::async_runtime::JoinHandle<()>,
+    peers: tauri::async_runtime::JoinHandle<()>,
 }
 
 /// Spawn the WS listener and the outbound peer supervisor, returning the handle
@@ -100,7 +100,7 @@ pub fn spawn_sync(state: &AppState, port: u16) -> SyncHandle {
     let status_for_err = state.server_status.clone();
     let bus_for_err = state.bus.clone();
     let server_shutdown = shutdown.subscribe();
-    let server = tokio::spawn(async move {
+    let server = tauri::async_runtime::spawn(async move {
         let advertised_host = network::best_lan_ip();
         let addr = network::wildcard_bind_addr(&advertised_host, port);
         if let Err(e) = run_server_with_shutdown(ctx, addr, server_shutdown).await {
@@ -115,7 +115,7 @@ pub fn spawn_sync(state: &AppState, port: u16) -> SyncHandle {
     let deps = state.peer_deps.clone();
     let notify = state.peer_notify.clone();
     let peer_shutdown = shutdown.subscribe();
-    let peers = tokio::spawn(async move {
+    let peers = tauri::async_runtime::spawn(async move {
         run_peer_supervisor_with_shutdown(deps, notify, peer_shutdown).await;
     });
 
