@@ -18,7 +18,10 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // Cargo's workspace target now lives at the repository root. On Windows,
+      // watching a DLL while rustc/link.exe replaces it raises EBUSY and kills
+      // Vite's beforeDevCommand. Rust/Tauri already watches both Rust crates.
+      ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"],
     },
   },
 });

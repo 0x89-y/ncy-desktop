@@ -320,7 +320,13 @@ pub fn run() {
             let dev_sidecar =
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ncy-core/pear-sidecar");
             let resource_sidecar = app.path().resource_dir()?.join("pear-sidecar");
-            let sidecar_root = if resource_sidecar.exists() {
+            // Development must use the source sidecar directly. After moving to
+            // a workspace, `target/debug/pear-sidecar` can exist as a copied
+            // resource and Tauri may return it with a Windows verbatim path that
+            // Bare cannot convert to a file URL. Packaged builds use resources.
+            let sidecar_root = if cfg!(debug_assertions) && dev_sidecar.exists() {
+                dev_sidecar
+            } else if resource_sidecar.exists() {
                 resource_sidecar
             } else {
                 dev_sidecar
