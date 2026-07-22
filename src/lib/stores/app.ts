@@ -94,7 +94,7 @@ export type View = "chats" | "settings";
 export const activeView = writable<View>("chats");
 
 /** Which sub-view fills the left list pane inside the chats view. */
-export type ChatPane = "chats" | "search" | "starred" | "reminders";
+export type ChatPane = "chats" | "starred" | "reminders";
 export const chatPane = writable<ChatPane>("chats");
 
 export const DEFAULT_QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "✅", "🔥"];
@@ -173,7 +173,7 @@ chatListDensity.subscribe((v) => {
 
 /** Active section within the settings view. Persisted per-device so reopening
  *  Settings lands on the last-used section. */
-export type SettingsTab = "general" | "sync" | "interface" | "transcription" | "backup" | "about";
+export type SettingsTab = "general" | "sync" | "interface" | "transcription" | "backup" | "changelog" | "about";
 const SETTINGS_TAB_KEY = "ncy:settings-tab";
 const normalizeSettingsTab = (value: string | null): SettingsTab => {
   switch (value) {
@@ -182,6 +182,7 @@ const normalizeSettingsTab = (value: string | null): SettingsTab => {
     case "interface":
     case "transcription":
     case "backup":
+    case "changelog":
     case "about":
       return value;
     case "appearance":

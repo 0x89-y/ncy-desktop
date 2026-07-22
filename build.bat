@@ -38,7 +38,8 @@ rem runtime, bundle, and native addons as release resources.
 call npm run pear:build
 if not "%ERRORLEVEL%"=="0" (
     echo PEAR WORKER BUILD FAILED
-    echo Run npm ci in ..\ncy-core\pear-sidecar and retry.
+    echo Fully exit Ncy Dev, including its tray process, before rebuilding.
+    echo If dependencies are missing, run npm ci in ..\ncy-core\pear-sidecar.
     pause
     exit /b 1
 )

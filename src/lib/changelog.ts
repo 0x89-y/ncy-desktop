@@ -15,6 +15,32 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.1",
+    date: "2026-07-22",
+    changes: [
+      "New checklists are ordinary messages using interactive Markdown task markers, while legacy checklists remain fully supported.",
+      "Combined attachments, voice recording, and a toggle for the new formatting toolbar into one composer add menu.",
+      "Removed the dedicated checklist composer; checklist formatting now works directly in the normal message field.",
+      "Consolidated profile, tag, and archived-chat filters into one menu.",
+      "Archived chats now remain hidden until enabled and appear in a separate section on both Android and Desktop.",
+      "Aligned the Android and Desktop composers, contextual message actions, and chat-settings organization.",
+      "Standardized Favorites, Paired devices, connection statuses, last-synchronized times, and empty-state wording across Android and Desktop.",
+      "Restricted LAN discovery advertisements to the selected network interface to avoid recurring virtual-adapter errors.",
+      "Replaced the dedicated Desktop search view with an inline chat-and-message search bar and compact adjacent filter button.",
+      "Refreshed the chat sidebar with an icon-only segmented view selector and an edge-to-edge layout.",
+      "Moved chat organization, appearance, privacy, and deletion controls into a dedicated settings panel.",
+      "Added scheduled automatic backups with preset or custom intervals, selectable destinations, configurable retention, and status reporting.",
+      "Moved deletion-record cleanup from Backup to advanced sync data maintenance.",
+      "Replaced the expanding changelog list with a latest-release preview and a series-filtered history view.",
+      "Reworked Settings into an edge-to-edge navigation rail and independently scrolling content pane.",
+      "Pear connection choices now save immediately and remain selected if the runtime cannot start.",
+      "Pear-enabled pairing codes now wait for a public key instead of silently falling back to local-only pairing.",
+      "Simplified local voice transcription to a one-click, progress-reported setup with pinned and verified downloads, including the Whisper runtime version and speech-model details in diagnostics.",
+      "Added verified Fast, Balanced, and Accurate speech-model choices with multilingual and English-only variants.",
+      "Downloaded speech models are now cached for instant switching, with an optional cleanup that preserves the active model.",
+    ],
+  },
+  {
     version: "0.7.0",
     date: "2026-07-19",
     changes: [

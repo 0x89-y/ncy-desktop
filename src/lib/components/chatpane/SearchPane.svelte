@@ -7,7 +7,7 @@
 
   type Hit = { chat: ChatSummary; message: Message };
 
-  let query = $state("");
+  let { query }: { query: string } = $props();
   let allMessages = $state<Hit[]>([]);
   let loading = $state(true);
 
@@ -64,13 +64,6 @@
 </script>
 
 <div class="pane col">
-  <input
-    type="search"
-    class="search"
-    placeholder="Search chats & messages…"
-    bind:value={query}
-  />
-
   <div class="list scroll">
     {#if loading}
       <div class="muted center tiny">Building index…</div>
@@ -109,19 +102,7 @@
 </div>
 
 <style>
-  .pane { height: 100%; padding: .75rem; gap: .5rem; }
-  .search {
-    padding: .5rem .7rem;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant, var(--border));
-    background: var(--surface-2, var(--surface));
-    color: inherit;
-    font: inherit;
-  }
-  .search:focus {
-    outline: 2px solid color-mix(in oklab, var(--accent, currentColor) 35%, transparent);
-    outline-offset: 0;
-  }
+  .pane { height: 100%; padding: .45rem; gap: .5rem; }
   .list { flex: 1; min-height: 0; overflow-y: auto; padding-right: .25rem; }
   .hits { list-style: none; margin: 0 0 .75rem; padding: 0; }
   .section-h { padding: .1rem .1rem .3rem; font-weight: 600; }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-07-22
+
+### Changed
+
+- Updated the shared Core and Desktop integration for the 0.7.1 release.
+- Restricted LAN discovery advertisements to the selected network interface to avoid
+  recurring errors from unrelated virtual adapters.
+
 ## 0.7.0 — 2026-07-19
 
 ### Added

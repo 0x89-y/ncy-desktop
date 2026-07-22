@@ -20,10 +20,18 @@
   let {
     discoverable,
     onDiscoverableChange,
+    connectionMode,
   }: {
     discoverable: boolean;
     onDiscoverableChange: (value: boolean) => void;
+    connectionMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
   } = $props();
+
+  function connectedLabel(): string {
+    if (connectionMode === "localOnly") return "Connected locally";
+    if (connectionMode === "pearOnly") return "Connected via Pear";
+    return "Connected";
+  }
 
   let label = $state("");
   let busy = $state(false);
@@ -324,7 +332,7 @@
                     ·
                   {/if}
                   Created {formatFullTime(p.pairing.createdAt)}
-                  {#if p.pairing.lastSeenAt} · last seen {formatFullTime(p.pairing.lastSeenAt)}{/if}
+                  {#if p.pairing.lastSeenAt} · last synchronized {formatFullTime(p.pairing.lastSeenAt)}{/if}
                 </span>
               </div>
               <div class="row" style="gap:.3rem">
@@ -381,7 +389,7 @@
                 <span
                   class="dot"
                   class:paired={online}
-                  title={online ? "Connected" : "Offline"}
+                  title={online ? connectedLabel() : "Waiting to connect"}
                 ></span>
                 <strong>{p.label}</strong>
               </div>
@@ -393,7 +401,7 @@
                   Device ID {shortDeviceFingerprint(p.id)} ·
                 {/if}
                 {p.host}:{p.port}
-                {#if p.lastSeenAt} · last seen {formatFullTime(p.lastSeenAt)}{/if}
+                {#if p.lastSeenAt} · last synchronized {formatFullTime(p.lastSeenAt)}{/if}
                 {#if !p.enabled} · automatic sync paused
                 {:else if !online && p.foregroundOnly} · open Ncy and enable phone sync there{/if}
                 {#if p.enabled && $peerErrors[p.id]} · {$peerErrors[p.id]}{/if}
@@ -429,7 +437,7 @@
             </div>
             <div class="row" style="gap:.3rem">
               <span class="chip" class:active={online}>
-                {!p.enabled ? "Paused" : online ? "Connected" : $peerErrors[p.id] ? "Sync error" : p.foregroundOnly ? "Open Ncy / enable sync" : "Offline"}
+                {!p.enabled ? "Paused" : online ? connectedLabel() : $peerErrors[p.id] ? "Connection error" : "Waiting to connect"}
               </span>
               <button
                 class="ghost compact"

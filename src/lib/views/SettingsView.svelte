@@ -3,6 +3,7 @@
   import {
     settings,
     refreshSettings,
+    refreshPairings,
     identity,
     refreshIdentity,
     refreshChats,
@@ -28,7 +29,7 @@
     installUpdate,
   } from "../stores/updater";
   import { CHANGELOG } from "../changelog";
-  import { Monitor, Sun, Moon, Mic, ArrowLeft, Save, Download, Upload } from "@lucide/svelte";
+  import { Monitor, Sun, Moon, ArrowLeft, Save, Download, Upload } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import DevicesPane from "../components/DevicesPane.svelte";
@@ -39,6 +40,7 @@
     { id: "interface", label: "Interface" },
     { id: "transcription", label: "Transcription" },
     { id: "backup", label: "Backup" },
+    { id: "changelog", label: "Changelog" },
     { id: "about", label: "About" },
   ];
 
@@ -65,13 +67,18 @@
     launchOnStartup: false,
     askBeforeDeleting: true,
     autoCheckUpdates: true,
+    autoBackupEnabled: false,
+    autoBackupIntervalHours: 24,
+    autoBackupFolder: null,
+    autoBackupRetention: 10,
+    lastAutoBackupAt: null,
+    lastAutoBackupError: null,
     syncServerEnabled: false,
   });
   let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
   let showSyncAdvanced = $state(false);
   let showTranscriptionAdvanced = $state(false);
-  let showOlderChangelog = $state(false);
 
   // Mirrors the titlebar dot, spelled out. "starting" is the brief window
   // between flipping the toggle on and the listener binding its port.
@@ -117,7 +124,7 @@
     return { port, deviceName, theme, discoverable, accent, transcriptionEnabled, syncTransportMode };
   }
 
-  function changeTransportMode(event: Event) {
+  async function changeTransportMode(event: Event) {
     const select = event.currentTarget as HTMLSelectElement;
     const next = select.value as AppSettings["syncTransportMode"];
     if (next !== "localOnly" && syncTransportMode === "localOnly") {
@@ -131,11 +138,25 @@
     }
     syncTransportMode = next;
     markDirty();
+    try {
+      await persistSettings();
+      dirty = false;
+    } catch (error) {
+      // The backend persists the requested policy before attempting to start
+      // Pear, so reload that durable choice and expose the startup failure.
+      await refreshSettings();
+      const message = typeof error === "string"
+        ? error
+        : error instanceof Error
+          ? error.message
+          : "unknown error";
+      alert(`The connection method was saved, but Pear could not start: ${message}`);
+    }
   }
 
   async function persistSettings() {
     await api.updateSettings(settingsPayload());
-    await refreshSettings();
+    await Promise.all([refreshSettings(), refreshPairings()]);
   }
 
   // Theme + accent both live-apply so the picker feels immediate. The Save
@@ -168,6 +189,8 @@
   let whisperError = $state<string | null>(null);
   let whisperBusy = $state(false);
   let downloadProgress = $state<{ written: number; total: number } | null>(null);
+  let downloadStage = $state<"runtime" | "model" | null>(null);
+  let pendingModelId = $state<string | null>(null);
   let transcriptionUnlisten: UnlistenFn | null = null;
 
   async function refreshWhisperStatus() {
@@ -189,18 +212,19 @@
     }
   }
 
-  async function downloadWhisperModel() {
+  async function setupWhisper() {
     if (whisperBusy) return;
     whisperBusy = true;
     whisperError = null;
     downloadProgress = { written: 0, total: 0 };
     try {
-      await api.transcriptionDownloadModel();
+      await api.transcriptionSetup();
     } catch (e: any) {
-      whisperError = typeof e === "string" ? e : (e?.message ?? "download failed");
+      whisperError = typeof e === "string" ? e : (e?.message ?? "setup failed");
     } finally {
       whisperBusy = false;
       downloadProgress = null;
+      downloadStage = null;
       await refreshWhisperStatus();
     }
   }
@@ -235,12 +259,15 @@
     transcriptionUnlisten = await api.onTranscriptionEvent((ev: TranscriptionEventPayload) => {
       if (ev.kind === "download-progress") {
         downloadProgress = { written: ev.written, total: ev.total };
+        downloadStage = ev.stage ?? "model";
       } else if (ev.kind === "download-complete") {
         downloadProgress = null;
+        downloadStage = null;
         void refreshWhisperStatus();
       } else if (ev.kind === "download-error") {
         whisperError = ev.message;
         downloadProgress = null;
+        downloadStage = null;
       }
     });
   });
@@ -269,7 +296,9 @@
     { name: "orange", color: "#ea580c", label: "Orange" },
     { name: "teal", color: "#0d9488", label: "Teal" },
   ];
-  const visibleChangelog = $derived(showOlderChangelog ? CHANGELOG : CHANGELOG.slice(0, 3));
+  let changelogSeries = $state("all");
+  const changelogSeriesOptions = $derived([...new Set(CHANGELOG.map((entry) => entry.version.split(".").slice(0, 2).join(".")))]);
+  const visibleChangelog = $derived(changelogSeries === "all" ? CHANGELOG : CHANGELOG.filter((entry) => entry.version.startsWith(`${changelogSeries}.`)));
 
   function toggleQuickReaction(emoji: string) {
     if ($quickReactions.includes(emoji)) {
@@ -367,6 +396,72 @@
       backupBusy = false;
     }
   }
+  function chosenModelId(): string {
+    return pendingModelId ?? whisperStatus?.modelId ?? "tiny";
+  }
+  function stageModelQuality(quality: "tiny" | "base" | "small") {
+    pendingModelId = `${quality}${chosenModelId().endsWith(".en") ? ".en" : ""}`;
+  }
+  function stageModelLanguage(englishOnly: boolean) {
+    pendingModelId = `${chosenModelId().split(".")[0]}${englishOnly ? ".en" : ""}`;
+  }
+  async function applyWhisperModel() {
+    const modelId = chosenModelId();
+    if (modelId === whisperStatus?.modelId || whisperBusy) return;
+    const sizes = { tiny: "75 MiB", base: "142 MiB", small: "466 MiB" };
+    const quality = modelId.split(".")[0] as "tiny" | "base" | "small";
+    const cached = whisperStatus?.cachedModelIds.includes(modelId) ?? false;
+    if (!cached && !confirm(`Download ${modelId} (~${sizes[quality]}) and use it for transcription?`)) return;
+    whisperBusy = true;
+    whisperError = null;
+    downloadStage = "model";
+    downloadProgress = { written: 0, total: 0 };
+    try {
+      await api.transcriptionSelectModel(modelId);
+    } catch (e: any) {
+      whisperError = typeof e === "string" ? e : (e?.message ?? "model download failed");
+    } finally {
+      whisperBusy = false;
+      downloadProgress = null;
+      downloadStage = null;
+      await refreshWhisperStatus();
+      if (!whisperError) pendingModelId = null;
+    }
+  }
+  async function removeUnusedWhisperModels() {
+    const bytes = whisperStatus?.unusedModelBytes ?? 0;
+    if (!bytes || whisperBusy) return;
+    if (!confirm(`Remove unused speech models and recover ${fmtMB(bytes)}? The active model will be kept.`)) return;
+    whisperBusy = true;
+    whisperError = null;
+    try {
+      await api.transcriptionRemoveUnusedModels();
+      await refreshWhisperStatus();
+    } catch (e: any) {
+      whisperError = typeof e === "string" ? e : (e?.message ?? "cleanup failed");
+    } finally {
+      whisperBusy = false;
+    }
+  }
+
+  async function chooseAutoBackupFolder() {
+    const picked = await openDialog({ title: "Choose automatic backup folder", directory: true, multiple: false });
+    const folder = Array.isArray(picked) ? picked[0] : picked;
+    if (folder) await updateDesktopPref("autoBackupFolder", folder);
+  }
+
+  async function runAutoBackupNow() {
+    backupBusy = true; backupMsg = null;
+    try {
+      await api.runAutomaticBackup();
+      const now = Date.now();
+      await updateDesktopPref("lastAutoBackupAt", now);
+      await updateDesktopPref("lastAutoBackupError", null);
+      backupMsg = "Automatic backup saved.";
+    } catch (e: any) {
+      backupMsg = typeof e === "string" ? e : (e?.message ?? "automatic backup failed");
+    } finally { backupBusy = false; }
+  }
 
   async function purgeTombstones() {
     if (!confirm(
@@ -378,23 +473,14 @@
   }
 </script>
 
-<div class="page-scroll scroll settings">
+<div class="page-scroll settings">
  <div class="page">
-  <div class="page-head">
-    <button class="back-btn" onclick={() => activeView.set("chats")} title="Back to chats" aria-label="Back to chats">
-      <ArrowLeft size={18} strokeWidth={2.5} />
-    </button>
-    <h1>Settings</h1>
-    {#if dirty || saving}
-      <button class="save-btn" onclick={save} disabled={saving} title="Save changes">
-        <Save size={16} strokeWidth={2.25} />
-        <span>{saving ? "Saving…" : "Save"}</span>
-      </button>
-    {/if}
-  </div>
-
   <div class="settings-layout">
    <nav class="side" aria-label="Settings sections">
+     <div class="side-head">
+       <button class="back-btn" onclick={() => activeView.set("chats")} title="Back to chats" aria-label="Back to chats"><ArrowLeft size={17} strokeWidth={2.5} /></button>
+       <h1>Settings</h1>
+     </div>
      {#each tabs as t (t.id)}
        <button
          type="button"
@@ -404,6 +490,10 @@
        >{t.label}</button>
      {/each}
    </nav>
+
+   {#if dirty || saving}
+     <button class="save-btn" onclick={save} disabled={saving} title="Save changes"><Save size={16} strokeWidth={2.25} /><span>{saving ? "Saving…" : "Save"}</span></button>
+   {/if}
 
    <div class="panes">
   {#if $settingsTab === "general"}
@@ -482,11 +572,11 @@
   </section>
   {:else if $settingsTab === "sync"}
   <section class="group">
-    <h2>Device sync</h2>
+    <h2>Paired-device connections</h2>
     <div class="opt-list">
       <label class="opt-row">
         <span class="opt-label">
-          Sync with nearby devices
+          Enable paired-device connections
           <span class="inline-hint">{serverStatusLabel}</span>
         </span>
         <span class="switch">
@@ -505,7 +595,7 @@
     <h2>This device</h2>
     <div class="opt-list">
       <label class="field">
-        <span class="field-label">Connection method</span>
+        <span class="field-label">Connection mode</span>
         <select value={syncTransportMode} onchange={changeTransportMode}>
           <option value="localOnly">Local only</option>
           <option value="pearOnly">Pear only</option>
@@ -546,6 +636,10 @@
             oninput={markDirty}
           />
         </label>
+        <div class="opt-row backup-action-row">
+          <span class="opt-label backup-action-label"><span>Forget deletion records</span><span class="inline-hint">Data maintenance: stale devices or backups may restore deleted content afterward.</span></span>
+          <button class="ghost backup-row-button danger" onclick={purgeTombstones}>Forget…</button>
+        </div>
       {/if}
     </div>
   </section>
@@ -555,6 +649,7 @@
   {#if desktopPrefs.syncServerEnabled}
     <DevicesPane
       discoverable={discoverable}
+      connectionMode={syncTransportMode}
       onDiscoverableChange={(value) => {
         discoverable = value;
         markDirty();
@@ -657,14 +752,20 @@
   </section>
   {:else if $settingsTab === "transcription"}
   <section class="group">
-    <h2><Mic size={16} strokeWidth={2.25} /> Voice transcription</h2>
+    <h2>Voice transcription</h2>
     <div class="opt-list">
       <label class="opt-row">
-        <span class="opt-label">Auto-transcribe voice messages</span>
+        <span class="opt-label">
+          Auto-transcribe voice messages
+          {#if whisperStatus && (!whisperStatus.cliPresent || !whisperStatus.modelPresent)}
+            <span class="inline-hint">Available after setup.</span>
+          {/if}
+        </span>
         <span class="switch">
           <input
             type="checkbox"
             checked={transcriptionEnabled}
+            disabled={!whisperStatus?.cliPresent || !whisperStatus?.modelPresent || whisperBusy}
             onchange={(e) => applyTranscriptionToggle((e.currentTarget as HTMLInputElement).checked)}
           />
           <span class="slider"></span>
@@ -672,23 +773,25 @@
       </label>
       <div class="opt-row">
         <span class="opt-label">
-          Whisper model
-          {#if whisperStatus?.modelPresent}
-            <span class="inline-hint">Installed{whisperStatus.modelSizeBytes ? ` · ${fmtMB(whisperStatus.modelSizeBytes)}` : ""}</span>
+          Local transcription
+          {#if whisperStatus?.cliPresent && whisperStatus?.modelPresent}
+            <span class="inline-hint" style="color:var(--success);">Ready · runs entirely on this device</span>
           {:else if downloadProgress}
-            <span class="inline-hint">Downloading…</span>
+            <span class="inline-hint">Setting up {downloadStage === "runtime" ? "Whisper" : "speech model"}…</span>
+          {:else if isMac || isLinux}
+            <span class="inline-hint">Automatic setup is currently available on 64-bit Windows.</span>
           {:else}
-            <span class="inline-hint">Required for local voice transcription.</span>
+            <span class="inline-hint">Downloads Whisper and the multilingual model (about 78 MB).</span>
           {/if}
         </span>
-        {#if whisperStatus?.modelPresent}
-          <button class="ghost" onclick={deleteWhisperModel} disabled={whisperBusy}>
-            Delete
-          </button>
-        {:else}
-          <button onclick={downloadWhisperModel} disabled={whisperBusy || !!downloadProgress}>
-            Download
-          </button>
+        {#if !whisperStatus?.cliPresent || !whisperStatus?.modelPresent}
+          {#if isMac || isLinux}
+            <button onclick={() => showTranscriptionAdvanced = true}>Show instructions</button>
+          {:else}
+            <button onclick={setupWhisper} disabled={whisperBusy || !!downloadProgress}>
+              {whisperStatus?.cliPresent || whisperStatus?.modelPresent ? "Repair setup" : "Set up"}
+            </button>
+          {/if}
         {/if}
       </div>
       {#if downloadProgress}
@@ -697,7 +800,7 @@
           : null}
         <div class="panel">
           <span class="tiny muted">
-            {fmtMB(downloadProgress.written)}{downloadProgress.total ? ` / ${fmtMB(downloadProgress.total)} (${pct}%)` : ""}
+            {downloadStage === "runtime" ? "Whisper runtime" : "Speech model"} · {fmtMB(downloadProgress.written)}{downloadProgress.total ? ` / ${fmtMB(downloadProgress.total)} (${pct}%)` : ""}
           </span>
           <div class="progress">
             <div class="progress-bar" style={`width:${pct ?? 0}%`}></div>
@@ -706,8 +809,8 @@
       {/if}
       <div class="opt-row">
         <span class="opt-label">
-          Advanced setup
-          <span class="inline-hint">Install folder, CLI, and ffmpeg status.</span>
+          Models & installation
+          <span class="inline-hint">Installation details and maintenance.</span>
         </span>
         <button type="button" class="subtle compact-btn" onclick={() => showTranscriptionAdvanced = !showTranscriptionAdvanced}>
           {showTranscriptionAdvanced ? "Hide" : "Show"}
@@ -725,15 +828,79 @@
         <div class="field">
           <span class="field-label">Whisper CLI (<code>{cliFileName}</code>)</span>
           {#if whisperStatus?.cliPresent}
-            <span class="tiny" style="color:var(--success);">Installed</span>
+            <span class="tiny" style="color:var(--success);">
+              Installed · {whisperStatus.runtimeVersion ? `whisper.cpp ${whisperStatus.runtimeVersion}` : "version unknown (manual installation)"}
+            </span>
           {:else}
             <span class="tiny" style="color:var(--warning);">
-              Not installed. Extract a
+              Not installed.{#if isMac || isLinux} Extract a
               <a href="https://github.com/ggml-org/whisper.cpp/releases" target="_blank" rel="noreferrer">whisper.cpp release</a>
               into the folder above: <code>{cliFileName}</code> plus its sibling
-              <code>{libExt}</code> libraries.{#if isMac || isLinux} Then <code>chmod +x {cliFileName}</code>.{/if}
+              <code>{libExt}</code> libraries, then <code>chmod +x {cliFileName}</code>.{/if}
             </span>
           {/if}
+        </div>
+
+        <div class="field">
+          <span class="field-label">Speech model · {whisperStatus?.modelLabel ?? "Whisper tiny · Fast · Multilingual"}</span>
+          <div class="row wrap-row">
+            <span class="tiny" style={whisperStatus?.modelPresent ? "color:var(--success);" : "color:var(--warning);"}>
+              {whisperStatus?.modelPresent ? `Installed${whisperStatus.modelSizeBytes ? ` · ${fmtMB(whisperStatus.modelSizeBytes)}` : ""}` : "Not installed"}
+            </span>
+            {#if whisperStatus?.modelPresent}
+              <button class="ghost" onclick={deleteWhisperModel} disabled={whisperBusy}>Delete model</button>
+            {/if}
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Quality</span>
+          <div class="model-tabs" aria-label="Transcription model quality">
+            <button class="model-tab" class:on={chosenModelId().startsWith("tiny")} disabled={whisperBusy} onclick={() => stageModelQuality("tiny")}>Fast</button>
+            <button class="model-tab" class:on={chosenModelId().startsWith("base")} disabled={whisperBusy} onclick={() => stageModelQuality("base")}>Balanced</button>
+            <button class="model-tab" class:on={chosenModelId().startsWith("small")} disabled={whisperBusy} onclick={() => stageModelQuality("small")}>Accurate</button>
+          </div>
+          <span class="tiny muted">
+            {chosenModelId().startsWith("tiny")
+              ? "Fast uses Whisper Tiny."
+              : chosenModelId().startsWith("base")
+                ? "Balanced uses Whisper Base."
+                : "Accurate uses Whisper Small."}
+          </span>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Language support</span>
+          <div class="model-tabs" aria-label="Transcription model language support">
+            <button class="model-tab" class:on={!chosenModelId().endsWith(".en")} disabled={whisperBusy} onclick={() => stageModelLanguage(false)}>Multilingual</button>
+            <button class="model-tab" class:on={chosenModelId().endsWith(".en")} disabled={whisperBusy} onclick={() => stageModelLanguage(true)}>English only</button>
+          </div>
+        </div>
+
+        {#if pendingModelId && pendingModelId !== whisperStatus?.modelId}
+          {@const pendingQuality = pendingModelId.split(".")[0] as "tiny" | "base" | "small"}
+          {@const pendingSize = { tiny: "75 MiB", base: "142 MiB", small: "466 MiB" }[pendingQuality]}
+          <div class="opt-row model-apply-row">
+            <span class="opt-label">
+              Selected: <strong>{pendingModelId}</strong>
+              <span class="inline-hint">
+                {whisperStatus?.cachedModelIds.includes(pendingModelId) ? "Already installed" : `Download size: ~${pendingSize}`}
+              </span>
+            </span>
+            <button disabled={whisperBusy} onclick={applyWhisperModel}>
+              {whisperStatus?.cachedModelIds.includes(pendingModelId) ? "Use model" : "Download and use"}
+            </button>
+          </div>
+        {/if}
+
+        <div class="opt-row">
+          <span class="opt-label">
+            Cached models
+            <span class="inline-hint">Downloaded models are kept for quick switching.</span>
+          </span>
+          <button class="ghost" disabled={whisperBusy || !(whisperStatus?.unusedModelBytes)} onclick={removeUnusedWhisperModels}>
+            Remove unused models{whisperStatus?.unusedModelBytes ? ` · ${fmtMB(whisperStatus.unusedModelBytes)}` : ""}
+          </button>
         </div>
 
         <div class="field">
@@ -762,6 +929,25 @@
   <section class="group">
     <h2>Backup</h2>
     <div class="opt-list">
+      <label class="opt-row">
+        <span class="opt-label"><strong>Automatic backups</strong><span class="inline-hint">Runs while Ncy is open or in the tray.</span></span>
+        <span class="switch">
+          <input type="checkbox" checked={desktopPrefs.autoBackupEnabled} onchange={(e) => updateDesktopPref("autoBackupEnabled", e.currentTarget.checked)} />
+          <span class="slider"></span>
+        </span>
+      </label>
+      {#if desktopPrefs.autoBackupEnabled}
+        <div class="opt-row"><span class="opt-label">Backup folder<span class="inline-hint">{desktopPrefs.autoBackupFolder ?? "No folder selected"}</span></span><button class="ghost backup-row-button" onclick={chooseAutoBackupFolder}>Choose…</button></div>
+        <label class="opt-row"><span class="opt-label">Frequency</span><select value={[24,168,720].includes(desktopPrefs.autoBackupIntervalHours) ? desktopPrefs.autoBackupIntervalHours : 0} onchange={(e) => updateDesktopPref("autoBackupIntervalHours", Number(e.currentTarget.value))}><option value="24">Daily</option><option value="168">Weekly</option><option value="720">Monthly</option><option value="0">Custom</option></select></label>
+        {#if ![24,168,720].includes(desktopPrefs.autoBackupIntervalHours)}
+          <label class="opt-row"><span class="opt-label">Custom interval in hours<span class="inline-hint">Minimum 1 hour.</span></span><input type="number" min="1" value={Math.max(1, desktopPrefs.autoBackupIntervalHours)} onchange={(e) => updateDesktopPref("autoBackupIntervalHours", Math.max(1, Number(e.currentTarget.value)))} /></label>
+        {/if}
+        <label class="opt-row"><span class="opt-label">Retention<span class="inline-hint">Only automatic backups created by Ncy are removed.</span></span><select value={desktopPrefs.autoBackupRetention === null ? "all" : "limited"} onchange={(e) => updateDesktopPref("autoBackupRetention", e.currentTarget.value === "all" ? null : 10)}><option value="limited">Keep latest</option><option value="all">Keep all</option></select></label>
+        {#if desktopPrefs.autoBackupRetention !== null}
+          <label class="opt-row"><span class="opt-label">Backups to keep</span><input type="number" min="1" max="100" value={desktopPrefs.autoBackupRetention} onchange={(e) => updateDesktopPref("autoBackupRetention", Math.min(100, Math.max(1, Number(e.currentTarget.value))))} /></label>
+        {/if}
+        <div class="opt-row backup-action-row"><span class="opt-label">{desktopPrefs.lastAutoBackupAt ? `Last backup: ${new Date(desktopPrefs.lastAutoBackupAt).toLocaleString()}` : "No automatic backup yet"}{#if desktopPrefs.lastAutoBackupError}<span class="inline-hint" style="color:var(--danger)">{desktopPrefs.lastAutoBackupError}</span>{/if}</span><button onclick={runAutoBackupNow} disabled={backupBusy || !desktopPrefs.autoBackupFolder}>Back up now</button></div>
+      {/if}
       <div class="opt-row backup-action-row">
         <span class="opt-label backup-action-label">
           <span class="backup-action-title">
@@ -785,20 +971,26 @@
           {backupBusy ? "Working…" : "Import"}
         </button>
       </div>
-      <div class="opt-row backup-action-row">
-        <span class="opt-label backup-action-label">
-          <span class="backup-action-title">Forget deletion records</span>
-          <span class="inline-hint">Advanced: stale backups may restore deleted chats or messages.</span>
-        </span>
-        <button class="ghost backup-row-button danger" onclick={purgeTombstones} disabled={backupBusy}>
-          Forget
-        </button>
-      </div>
       {#if backupMsg}
         <div class="panel backup-status">
           <span class="muted tiny">{backupMsg}</span>
         </div>
       {/if}
+    </div>
+  </section>
+  {:else if $settingsTab === "changelog"}
+  <section class="group changelog-view">
+    <div class="changelog-head">
+      <h2>Changelog</h2>
+    </div>
+    <div class="seg changelog-series">
+      <button class="seg-btn" class:on={changelogSeries === "all"} onclick={() => changelogSeries = "all"}>All</button>
+      {#each changelogSeriesOptions as series (series)}<button class="seg-btn" class:on={changelogSeries === series} onclick={() => changelogSeries = series}>{series}.x</button>{/each}
+    </div>
+    <div class="changelog">
+      {#each visibleChangelog as rel (rel.version)}
+        <div class="rel"><div class="rel-head"><span class="mono rel-ver">v{rel.version}</span><span class="mono muted rel-date">{rel.date}</span></div><ul class="rel-list">{#each rel.changes as c (c)}<li>{c}</li>{/each}</ul></div>
+      {/each}
     </div>
   </section>
   {:else if $settingsTab === "about"}
@@ -866,33 +1058,6 @@
     </div>
   </section>
 
-  {#if CHANGELOG.length}
-  <section class="group">
-    <h2>Changelog</h2>
-    <div class="changelog">
-      {#each visibleChangelog as rel (rel.version)}
-        <div class="rel">
-          <div class="rel-head">
-            <span class="mono rel-ver">v{rel.version}</span>
-            <span class="mono muted rel-date">{rel.date}</span>
-          </div>
-          <ul class="rel-list">
-            {#each rel.changes as c (c)}
-              <li>{c}</li>
-            {/each}
-          </ul>
-        </div>
-      {/each}
-      {#if CHANGELOG.length > 3}
-        <div class="rel">
-          <button type="button" class="subtle compact-btn" onclick={() => showOlderChangelog = !showOlderChangelog}>
-            {showOlderChangelog ? "Show less" : "Show older"}
-          </button>
-        </div>
-      {/if}
-    </div>
-  </section>
-  {/if}
   {/if}
    </div>
   </div>
@@ -900,44 +1065,45 @@
 </div>
 
 <style>
-  /* Full-width scroller so the scrollbar hugs the window's right edge, while
-     the content itself stays centered inside a narrower column. */
   .page-scroll {
     height: 100%;
     width: 100%;
+    overflow: hidden;
+    min-width: 0;
   }
   .page {
-    padding: 1.5rem;
+    height: 100%;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
-    max-width: 880px;
-    margin: 0 auto;
+    gap: 0;
+    max-width: none;
+    margin: 0;
   }
   h1 { margin: 0; font-size: 1.4rem; }
-  .page-head {
-    position: sticky;
-    top: 0;
-    z-index: 6;
+  .side-head {
     display: flex;
-    flex-direction: row;
     align-items: center;
-    gap: .75rem;
-    margin: -1.5rem -1.5rem 0;
-    padding: 1.5rem 1.5rem .75rem;
-    background: var(--bg);
+    gap: .5rem;
+    min-height: 49px;
+    padding: .45rem .6rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
   }
   /* Round accent back button — the primary way out of settings. Background /
      hover color come from the global button default (accent + accent-hover). */
   .back-btn {
     flex-shrink: 0;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 0;
-    border-radius: var(--radius);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-muted);
     line-height: 0;
   }
   .id {
@@ -951,7 +1117,10 @@
   /* Save action lives top-right in the header, appearing only when there are
      unsaved changes. */
   .save-btn {
-    margin-left: auto;
+    position: absolute;
+    top: .55rem;
+    right: .75rem;
+    z-index: 5;
     flex-shrink: 0;
     display: inline-flex;
     align-items: center;
@@ -1037,11 +1206,15 @@
   /* Master-detail panel: one bordered frame holding the category rail (left,
      with a divider) and the active category's content (right). */
   .settings-layout {
+    position: relative;
+    flex: 1;
+    min-height: 0;
     display: flex;
     align-items: stretch;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border: none;
+    border-radius: 0;
     overflow: hidden;
+    width: 100%;
     background: var(--surface);
   }
   .side {
@@ -1051,6 +1224,11 @@
     border-right: 1px solid var(--border);
     background: var(--surface-2);
   }
+  .side h1 { font-size:.95rem; font-weight:600; }
+  .changelog-series { margin:0 var(--settings-pad) 1rem; max-width:calc(100% - 2 * var(--settings-pad)); overflow-x:auto; }
+  .panes:has(.changelog-view) { padding-top:0; }
+  .changelog-head { display:flex; align-items:center; gap:.55rem; padding:.45rem var(--settings-pad); border-bottom:1px solid var(--border); margin-bottom:.55rem; }
+  .changelog-head h2 { margin:0; padding:0; font-size:1rem; font-weight:600; }
   .side-link {
     text-align: left;
     padding: .55rem .7rem;
@@ -1080,7 +1258,8 @@
     display: flex;
     flex-direction: column;
     gap: 0;
-    padding: 1.5rem 0;
+    padding: .65rem 0 1.5rem;
+    overflow-y: auto;
   }
 
   /* Sliding switch, sized to sit on the right of an `.opt-row`. */
@@ -1143,6 +1322,35 @@
     background: var(--accent);
     color: var(--accent-contrast);
   }
+  /* Matches the Chat / Starred / Reminders selector in the main sidebar. */
+  .model-tabs {
+    display: flex;
+    width: min(100%, 30rem);
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .model-tab {
+    flex: 1;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: .45rem .65rem;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 5px;
+    font-weight: 500;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color .15s ease, color .15s ease;
+  }
+  .model-tab:hover:not(.on) { background: var(--surface-hover); color: var(--text); filter: none; }
+  .model-tab.on { background: var(--accent); color: var(--accent-contrast); }
+  .model-apply-row { margin-top: .15rem; }
   /* Accent swatch row */
   .accents {
     display: flex;

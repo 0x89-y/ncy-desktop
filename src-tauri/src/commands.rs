@@ -35,6 +35,18 @@ pub struct DesktopPrefs {
     pub ask_before_deleting: bool,
     #[serde(rename = "autoCheckUpdates")]
     pub auto_check_updates: bool,
+    #[serde(rename = "autoBackupEnabled", default)]
+    pub auto_backup_enabled: bool,
+    #[serde(rename = "autoBackupIntervalHours", default = "default_backup_interval")]
+    pub auto_backup_interval_hours: u64,
+    #[serde(rename = "autoBackupFolder", default)]
+    pub auto_backup_folder: Option<String>,
+    #[serde(rename = "autoBackupRetention", default = "default_backup_retention")]
+    pub auto_backup_retention: Option<u32>,
+    #[serde(rename = "lastAutoBackupAt", default)]
+    pub last_auto_backup_at: Option<i64>,
+    #[serde(rename = "lastAutoBackupError", default)]
+    pub last_auto_backup_error: Option<String>,
     /// Run the LAN sync stack (WS listener, mDNS, outbound peers). Off for fresh
     /// installs — Ncy works standalone, and sync is opt-in.
     ///
@@ -54,6 +66,8 @@ pub struct DesktopPrefs {
 fn sync_enabled_for_existing_install() -> bool {
     true
 }
+fn default_backup_interval() -> u64 { 24 }
+fn default_backup_retention() -> Option<u32> { Some(10) }
 
 impl Default for DesktopPrefs {
     fn default() -> Self {
@@ -64,6 +78,12 @@ impl Default for DesktopPrefs {
             launch_on_startup: false,
             ask_before_deleting: true,
             auto_check_updates: true,
+            auto_backup_enabled: false,
+            auto_backup_interval_hours: default_backup_interval(),
+            auto_backup_folder: None,
+            auto_backup_retention: default_backup_retention(),
+            last_auto_backup_at: None,
+            last_auto_backup_error: None,
             sync_server_enabled: false,
         }
     }
@@ -339,12 +359,12 @@ pub async fn lock_chat(state: State<'_, AppState>, chat_id: String) -> Result<()
 
 #[tauri::command]
 pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDescriptor>, String> {
+    let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairings = state.pairings.read().await;
     let settings = state.settings.read().await.clone();
     let identity_device_id = state.identity_device_id.clone();
     let identity_name = settings.device_name.clone();
     let host = state.advertised_host.read().await.clone();
-    let pear_public_key = state.pear_public_key.read().await.clone();
     let mut out = Vec::new();
     for p in pairings.pairings.iter() {
         let payload = PairingPayload {
@@ -367,11 +387,38 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
     Ok(out)
 }
 
+/// A Pear-capable pairing must never silently degrade to a LAN-only payload.
+/// Retry startup here so a transient sidecar failure at application launch can
+/// recover when the user actually opens or creates a pairing invitation.
+async fn pairing_pear_public_key(state: &AppState) -> Result<Option<String>, String> {
+    let mode = state.settings.read().await.sync_transport_mode;
+    if !mode.uses_pear() {
+        return Ok(None);
+    }
+    if state.sync_shutdown.lock().unwrap().is_none() {
+        return Err("Pear pairing requires device sync to be enabled".to_string());
+    }
+    if let Some(public_key) = state.pear_public_key.read().await.clone() {
+        return Ok(Some(public_key));
+    }
+    crate::apply_pear_mode(state, mode)
+        .await
+        .map_err(|error| format!("Pear is not ready: {error}"))?;
+    state
+        .pear_public_key
+        .read()
+        .await
+        .clone()
+        .map(Some)
+        .ok_or_else(|| "Pear started without providing a public key".to_string())
+}
+
 #[tauri::command]
 pub async fn create_pairing(
     state: State<'_, AppState>,
     label: String,
 ) -> Result<PairingDescriptor, String> {
+    let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairing = Pairing::new_with_label(label);
     {
         let mut guard = state.pairings.write().await;
@@ -380,7 +427,6 @@ pub async fn create_pairing(
     }
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
-    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -411,6 +457,7 @@ pub async fn rotate_pairing(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<PairingDescriptor, String> {
+    let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairing = {
         let mut guard = state.pairings.write().await;
         let pairing = guard
@@ -425,7 +472,6 @@ pub async fn rotate_pairing(
     };
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
-    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -457,6 +503,7 @@ pub async fn pair_accept(
     session_id: String,
     label: String,
 ) -> Result<(), String> {
+    let pear_public_key = pairing_pear_public_key(&state).await?;
     let session = {
         let mut reg = state.pairing_registry.lock().await;
         reg.remove(&session_id)
@@ -478,7 +525,6 @@ pub async fn pair_accept(
     }
     let settings = state.settings.read().await.clone();
     let host = state.advertised_host.read().await.clone();
-    let pear_public_key = state.pear_public_key.read().await.clone();
     let payload = PairingPayload {
         v: 1,
         device_id: state.identity_device_id.clone(),
@@ -701,6 +747,13 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
+    // Persist the user's routing policy before starting its runtime. A
+    // transient Pear startup failure must not silently reset the selector to
+    // Local only; retaining the preference also lets the next launch/pairing
+    // attempt retry startup.
+    crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
+    *state.settings.write().await = settings.clone();
+
     let sync_running = state.sync_shutdown.lock().unwrap().is_some();
     if sync_running {
         crate::apply_pear_mode(&state, settings.sync_transport_mode)
@@ -713,8 +766,6 @@ pub async fn update_settings(
             .map_err(|error| error.to_string())?;
         *state.transport_mode.write().await = settings.sync_transport_mode;
     }
-    crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
-    *state.settings.write().await = settings.clone();
 
     // Keep the pair-endpoint gate in lock-step with the discoverable toggle.
     // Turning discoverability OFF should immediately refuse new pair requests,
@@ -1192,6 +1243,40 @@ pub async fn author_toggle_checklist_item(
         .find(|i| i.id == item_id)
         .ok_or_else(|| "checklist item not found".to_string())?;
     item.checked = !item.checked;
+    msg.edited_at = Some(now_ms());
+    author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
+}
+
+/// Toggle a Markdown task marker inside an ordinary TEXT message. The entire
+/// message is emitted through the normal MessageEdited path; legacy CHECKLIST
+/// messages continue to use `author_toggle_checklist_item` above.
+#[tauri::command]
+pub async fn author_toggle_text_checklist_block(
+    state: State<'_, AppState>,
+    chat_id: String,
+    message_id: String,
+    block_index: usize,
+) -> Result<(), String> {
+    let key = state.keystore.key_for(&chat_id);
+    let mut msg = current_message(&state.events, &chat_id, &message_id, key.as_ref())?;
+    if !matches!(msg.message_type, MessageType::Text) {
+        return Err("not a text message".into());
+    }
+    let block = msg
+        .content
+        .get_mut(block_index)
+        .ok_or_else(|| "checklist block not found".to_string())?;
+    let span = block
+        .spans
+        .first_mut()
+        .ok_or_else(|| "checklist marker not found".to_string())?;
+    if span.text.starts_with("[ ] ") {
+        span.text.replace_range(..3, "[x]");
+    } else if span.text.starts_with("[x] ") || span.text.starts_with("[X] ") {
+        span.text.replace_range(..3, "[ ]");
+    } else {
+        return Err("checklist marker not found".into());
+    }
     msg.edited_at = Some(now_ms());
     author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
@@ -1941,6 +2026,10 @@ pub struct ImportSummary {
 /// another machine would clone the deviceId and break sync.
 #[tauri::command]
 pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Result<(), String> {
+    export_backup_to(state.inner(), &dest_path)
+}
+
+fn export_backup_to(state: &AppState, dest_path: &str) -> Result<(), String> {
     use std::io::Write;
     let file = std::fs::File::create(&dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
@@ -2004,6 +2093,26 @@ pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Res
     }
     zip.finish().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn run_automatic_backup(state: State<'_, AppState>) -> Result<String, String> {
+    let prefs = state.desktop_prefs.read().unwrap().clone();
+    let folder = prefs.auto_backup_folder.ok_or("Choose an automatic backup folder")?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("create backup folder: {e}"))?;
+    let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+    let path = std::path::Path::new(&folder).join(format!("ncy-auto-backup-{stamp}.zip"));
+    export_backup_to(state.inner(), path.to_string_lossy().as_ref())?;
+    if let Some(keep) = prefs.auto_backup_retention {
+        let mut files: Vec<_> = std::fs::read_dir(&folder).map_err(|e| e.to_string())?
+            .flatten().map(|e| e.path()).filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("ncy-auto-backup-") && n.ends_with(".zip"))
+            }).collect();
+        files.sort();
+        let remove_count = files.len().saturating_sub(keep.max(1) as usize);
+        for old in files.into_iter().take(remove_count) { std::fs::remove_file(old).map_err(|e| e.to_string())?; }
+    }
+    Ok(path.to_string_lossy().into_owned())
 }
 
 /// Restore a backup zip by *replaying* its events into the local log — a union,
@@ -2211,7 +2320,8 @@ pub async fn transcription_download_model(
 ) -> Result<(), String> {
     let paths = whisper_paths(state.inner());
     let app_for_progress = app.clone();
-    let result = crate::storage::whisper::download_model(&paths, move |written, total| {
+    let model_id = paths.model_id();
+    let result = crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
         let _ = app_for_progress.emit(
             "transcription-event",
             serde_json::json!({
@@ -2241,9 +2351,110 @@ pub async fn transcription_download_model(
     }
 }
 
-/// Open the whisper install folder in the OS file explorer so the user can
-/// drop `whisper-cli.exe` in place manually (release-URL scraping is brittle,
-/// so v1 keeps the CLI a manual-install step).
+/// One-click local transcription setup. Installs the tested whisper.cpp
+/// runtime first and then the model, skipping either component when it is
+/// already present so interrupted setups are naturally resumable.
+#[tauri::command]
+pub async fn transcription_setup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let paths = whisper_paths(state.inner());
+    let result: anyhow::Result<()> = async {
+        if !paths.cli_present() {
+            let progress_app = app.clone();
+            crate::storage::whisper::download_runtime(&paths, move |written, total| {
+                let _ = progress_app.emit(
+                    "transcription-event",
+                    serde_json::json!({
+                        "kind": "download-progress",
+                        "stage": "runtime",
+                        "written": written,
+                        "total": total,
+                    }),
+                );
+            })
+            .await?;
+        }
+        if !paths.model_present() {
+            let progress_app = app.clone();
+            let model_id = paths.model_id();
+            crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
+                let _ = progress_app.emit(
+                    "transcription-event",
+                    serde_json::json!({
+                        "kind": "download-progress",
+                        "stage": "model",
+                        "written": written,
+                        "total": total,
+                    }),
+                );
+            })
+            .await?;
+        }
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-complete" }),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-error", "message": message.clone() }),
+            );
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn transcription_select_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> Result<(), String> {
+    let paths = whisper_paths(state.inner());
+    if paths.model_cached(&model_id) {
+        paths.activate_cached_model(&model_id).map_err(|error| error.to_string())?;
+        let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-complete" }));
+        return Ok(());
+    }
+    let progress_app = app.clone();
+    let result = crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
+        let _ = progress_app.emit("transcription-event", serde_json::json!({
+            "kind": "download-progress", "stage": "model", "written": written, "total": total,
+        }));
+    }).await;
+    match result {
+        Ok(()) => {
+            let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-complete" }));
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-error", "message": message.clone() }));
+            Err(message)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn transcription_remove_unused_models(
+    state: State<'_, AppState>,
+) -> Result<u64, String> {
+    whisper_paths(state.inner()).remove_unused_models().map_err(|error| error.to_string())
+}
+
+/// Open the whisper install folder in the OS file explorer for diagnostics or
+/// manual installation on platforms where automatic setup is not yet offered.
 #[tauri::command]
 pub async fn transcription_open_folder(state: State<'_, AppState>) -> Result<(), String> {
     let paths = whisper_paths(state.inner());
@@ -2277,6 +2488,7 @@ pub async fn transcription_delete_model(state: State<'_, AppState>) -> Result<()
     if paths.model.is_file() {
         std::fs::remove_file(&paths.model).map_err(|e| format!("delete model: {e}"))?;
     }
+    let _ = std::fs::remove_file(paths.dir.join("model-id.txt"));
     Ok(())
 }
 

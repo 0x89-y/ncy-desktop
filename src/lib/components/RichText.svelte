@@ -1,12 +1,47 @@
 <script lang="ts">
-  import type { RichTextBlock } from "../ipc";
+  import type { RichTextBlock, RichTextSpan } from "../ipc";
   import RichSpan from "./RichSpan.svelte";
-  let { blocks }: { blocks: RichTextBlock[] } = $props();
+  let { blocks, onChecklistToggle }: {
+    blocks: RichTextBlock[];
+    onChecklistToggle?: (blockIndex: number) => void;
+  } = $props();
+
+  function checklistState(block: RichTextBlock): boolean | null {
+    const text = block.spans.map((span) => span.text).join("");
+    if (text.startsWith("[ ] ")) return false;
+    if (text.startsWith("[x] ") || text.startsWith("[X] ")) return true;
+    return null;
+  }
+
+  function withoutChecklistMarker(spans: RichTextSpan[]): RichTextSpan[] {
+    let remaining = 4;
+    return spans.flatMap((span) => {
+      if (remaining === 0) return [span];
+      if (span.text.length <= remaining) {
+        remaining -= span.text.length;
+        return [];
+      }
+      const result = { ...span, text: span.text.slice(remaining) };
+      remaining = 0;
+      return [result];
+    });
+  }
 </script>
 
 <div class="rt">
   {#each blocks as block, i (i)}
-    {#if block.type === "HEADING1"}
+    {@const checked = checklistState(block)}
+    {#if checked !== null}
+      <label class="task-item">
+        <input
+          type="checkbox"
+          {checked}
+          disabled={!onChecklistToggle}
+          onchange={() => onChecklistToggle?.(i)}
+        />
+        <span class:checked>{#each withoutChecklistMarker(block.spans) as s, j (j)}<RichSpan span={s} />{/each}</span>
+      </label>
+    {:else if block.type === "HEADING1"}
       <h1>{#each block.spans as s, j (j)}<RichSpan span={s} />{/each}</h1>
     {:else if block.type === "HEADING2"}
       <h2>{#each block.spans as s, j (j)}<RichSpan span={s} />{/each}</h2>
@@ -48,4 +83,7 @@
     margin: 0 0 0.25rem 0;
   }
   .rt :global(a) { color: var(--primary); }
+  .task-item { display: flex; align-items: flex-start; gap: 0.45rem; margin: 0.1rem 0; }
+  .task-item input { margin-top: 0.22rem; accent-color: var(--primary); }
+  .task-item .checked { text-decoration: line-through; opacity: 0.72; }
 </style>

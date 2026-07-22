@@ -446,6 +446,25 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
+  async function copyMessage() {
+    const text = message.type === "CHECKLIST"
+      ? message.checklistItems.map((item) => `${item.checked ? "[x]" : "[ ]"} ${item.text}`).join("\n")
+      : (message.transcript || flattenContent(message));
+    if (text) await navigator.clipboard.writeText(text);
+  }
+
+  async function toggleTextChecklistBlock(blockIndex: number) {
+    if (busy) return;
+    busy = true;
+    try {
+      await api.authorToggleTextChecklistBlock(message.chatId, message.id, blockIndex);
+    } catch (e) {
+      console.error("toggle text checklist item failed", e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function downloadFile() {
     if (!fileHash || !fileAttachment || !fileAvailable || fileSaving) return;
     fileSaving = true;
@@ -698,7 +717,7 @@
         </div>
       </div>
     {:else}
-      <RichText blocks={message.content} />
+      <RichText blocks={message.content} onChecklistToggle={toggleTextChecklistBlock} />
     {/if}
 
     {#if message.tags.length && !inlineTag}
@@ -735,7 +754,7 @@
       {/if}
       <!-- Passive indicators — actions live in the right-click menu. -->
       {#if message.isStarred}
-        <span class="indicator" title="Starred" aria-label="Starred">
+        <span class="indicator" title="Favorite" aria-label="Favorite">
           <Star size={12} strokeWidth={2.35} />
         </span>
       {/if}
@@ -809,6 +828,13 @@
       disabled={busy}
       onclick={() => { closeCtx(); onReply?.(message); }}
     >Reply</button>
+    {#if message.type === "TEXT" || message.type === "IMAGE" || message.type === "CHECKLIST" || (message.type === "VOICE" && message.transcript)}
+      <button
+        type="button"
+        disabled={busy}
+        onclick={() => { closeCtx(); void copyMessage(); }}
+      >Copy</button>
+    {/if}
     {#if message.type === "TEXT"}
       <button
         type="button"
@@ -827,7 +853,7 @@
       type="button"
       disabled={busy}
       onclick={() => { closeCtx(); void toggleStar(); }}
-    >{message.isStarred ? "Unstar" : "Star"}</button>
+    >{message.isStarred ? "Remove from favorites" : "Add to favorites"}</button>
     <button
       type="button"
       disabled={busy}

@@ -12,6 +12,7 @@
   import SettingsView from "./lib/views/SettingsView.svelte";
   import { initAppUpdater } from "./lib/stores/updater";
   import { initClosePrompt } from "./lib/stores/tray";
+  import { initAutomaticBackups } from "./lib/stores/backups";
   import { Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
@@ -42,6 +43,7 @@
       booted = true;
     }
     initAppUpdater();
+    initAutomaticBackups();
   });
 
   $effect(() => {

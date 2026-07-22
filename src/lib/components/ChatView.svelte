@@ -16,8 +16,9 @@
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
   import {
-    Plus, ListChecks, Pin, Lock, Unlock,
-    MoreHorizontal, MessageSquare, Mic, Square, Paperclip,
+    Bold, Code2, Heading1, Heading2, Heading3, Italic, List, ListChecks,
+    Plus, Pin, Lock, Strikethrough, Unlock, X,
+    MessageSquare, Mic, Settings, Square,
   } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
@@ -29,9 +30,25 @@
   let sending = $state(false);
   let sendError = $state<string | null>(null);
 
-  // Checklist composer: a small inline form. One item per line.
-  let checklistOpen = $state(false);
-  let checklistText = $state("");
+  let composeActionsOpen = $state(false);
+  let formattingOpen = $state(false);
+
+  function resizeComposer() {
+    if (!composeTextarea) return;
+    composeTextarea.style.height = "auto";
+    const styles = getComputedStyle(composeTextarea);
+    const borderHeight = parseFloat(styles.borderTopWidth) + parseFloat(styles.borderBottomWidth);
+    const maxHeight = parseFloat(styles.maxHeight);
+    const contentHeight = composeTextarea.scrollHeight + borderHeight;
+    const targetHeight = Number.isFinite(maxHeight) ? Math.min(contentHeight, maxHeight) : contentHeight;
+    composeTextarea.style.height = `${targetHeight}px`;
+    composeTextarea.style.overflowY = Number.isFinite(maxHeight) && contentHeight > maxHeight ? "auto" : "hidden";
+  }
+
+  $effect(() => {
+    composeText;
+    queueMicrotask(resizeComposer);
+  });
 
   // Phase 2b polish: pull the chat's wallpaper blob if backgroundFile is content-addressed.
   // Legacy `background.jpg` references (pre-content-addressing) extract to null and are
@@ -89,30 +106,6 @@
       highlightedId = null;
       highlightTimer = null;
     }, 1400);
-  }
-
-  async function sendChecklist() {
-    const c = $activeChat;
-    if (!c || sending) return;
-    const items = checklistText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0);
-    if (items.length === 0) {
-      sendError = "checklist has no items";
-      return;
-    }
-    sending = true;
-    sendError = null;
-    try {
-      await api.authorSendChecklist(c.metadata.id, items, consumeReplyId());
-      checklistText = "";
-      checklistOpen = false;
-    } catch (e: any) {
-      sendError = typeof e === "string" ? e : (e?.message ?? "checklist send failed");
-    } finally {
-      sending = false;
-    }
   }
 
   $effect(() => {
@@ -221,14 +214,6 @@
     composeTextarea.setSelectionRange(m.selStart, m.selEnd);
   }
 
-  // Formatting items: restore the snapshot selection, then reuse the existing
-  // apply* helpers (they read + re-set the selection themselves).
-  function menuFormat(fn: () => void) {
-    restoreSelection();
-    fn();
-    closeComposeMenu();
-  }
-
   async function menuCopy() {
     const m = composeMenu;
     if (!m) return;
@@ -286,6 +271,11 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && composeActionsOpen) {
+      e.preventDefault();
+      composeActionsOpen = false;
+      return;
+    }
     if (e.key === "Escape" && composeMenu) {
       e.preventDefault();
       closeComposeMenu();
@@ -364,7 +354,7 @@
   }
 
   // ----- Chat management (rename / pin / archive / tags / delete) -----
-  let menuOpen = $state(false);
+  let chatSettingsOpen = $state(false);
   // null = menu only; "rename"/"tags" = an inline editor is showing.
   let editMode = $state<null | "rename" | "tags">(null);
   let editValue = $state("");
@@ -378,7 +368,7 @@
         ? c.metadata.name
         : c.metadata.tags.join(", ");
     editMode = mode;
-    menuOpen = false;
+    chatSettingsOpen = false;
   }
 
   function cancelEdit() {
@@ -421,7 +411,7 @@
     pin1 = "";
     pin2 = "";
     pinError = null;
-    menuOpen = false;
+    chatSettingsOpen = false;
   }
   function cancelPin() {
     pinMode = null;
@@ -468,21 +458,21 @@
   async function togglePin() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     await runMeta({ isPinned: !c.metadata.isPinned });
   }
 
   async function toggleArchive() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     await runMeta({ isArchived: !c.metadata.isArchived });
   }
 
   async function deleteChat() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
     if (
       prefs.askBeforeDeleting &&
@@ -518,7 +508,7 @@
   async function setAvatar() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     const path = await pickImageFile();
     if (!path) return;
     try {
@@ -532,7 +522,7 @@
   async function clearAvatar() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     try {
       await api.authorClearChatAvatar(c.metadata.id);
       await refreshActiveChat();
@@ -544,7 +534,7 @@
   async function setBackground() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     const path = await pickImageFile();
     if (!path) return;
     try {
@@ -558,7 +548,7 @@
   async function clearBackground() {
     const c = $activeChat;
     if (!c) return;
-    menuOpen = false;
+    chatSettingsOpen = false;
     try {
       await api.authorClearChatBackground(c.metadata.id);
       await refreshActiveChat();
@@ -674,17 +664,15 @@
     return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, "0")}`;
   }
 
-  async function attachImage() {
+  async function attach() {
     const c = $activeChat;
     if (!c || sending) return;
+    composeActionsOpen = false;
     let picked: string | string[] | null;
     try {
       picked = await openDialog({
         multiple: false,
         directory: false,
-        filters: [
-          { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"] },
-        ],
       });
     } catch (e: any) {
       sendError = typeof e === "string" ? e : (e?.message ?? "could not open picker");
@@ -692,36 +680,19 @@
     }
     const path = Array.isArray(picked) ? picked[0] : picked;
     if (!path) return;
-    sending = true;
-    sendError = null;
-    try {
-      await api.authorSendImage(c.metadata.id, path, consumeReplyId());
-    } catch (e: any) {
-      sendError = typeof e === "string" ? e : (e?.message ?? "image send failed");
-    } finally {
-      sending = false;
-    }
-  }
-
-  async function attachFile() {
-    const c = $activeChat;
-    if (!c || sending) return;
-    let picked: string | string[] | null;
-    try {
-      picked = await openDialog({ multiple: false, directory: false });
-    } catch (e: any) {
-      sendError = typeof e === "string" ? e : (e?.message ?? "could not open picker");
-      return;
-    }
-    const path = Array.isArray(picked) ? picked[0] : picked;
-    if (!path) return;
     const displayName = path.split(/[\\/]/).pop() || "File";
+    const extension = displayName.includes(".") ? displayName.split(".").pop()!.toLowerCase() : "";
+    const isImage = ["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(extension);
     sending = true;
     sendError = null;
     try {
-      await api.authorSendFile(c.metadata.id, path, displayName, consumeReplyId());
+      if (isImage) {
+        await api.authorSendImage(c.metadata.id, path, consumeReplyId());
+      } else {
+        await api.authorSendFile(c.metadata.id, path, displayName, consumeReplyId());
+      }
     } catch (e: any) {
-      sendError = typeof e === "string" ? e : (e?.message ?? "file send failed");
+      sendError = typeof e === "string" ? e : (e?.message ?? "attachment send failed");
     } finally {
       sending = false;
     }
@@ -734,7 +705,7 @@
     <header class="row header">
       <Avatar
         name={chat.metadata.name}
-        size={40}
+        size={34}
         avatarFile={chat.metadata.avatarFile}
       />
       <div class="col title-block">
@@ -742,12 +713,6 @@
           {#if chat.metadata.isPinned}<span class="title-ico"><Pin size={13} strokeWidth={2.25} /></span>{/if}
           {#if chat.metadata.isProtected}<span class="title-ico"><Lock size={13} strokeWidth={2.25} /></span>{/if}
           {chat.metadata.name}
-        </div>
-        <div class="muted tiny">
-          {chat.messages.length} message{chat.messages.length === 1 ? "" : "s"}
-          {#if chat.metadata.tags.length} ·
-            {#each chat.metadata.tags as t (t)}<span class="chip tiny">#{t}</span>{/each}
-          {/if}
         </div>
       </div>
       {#if chat.metadata.isProtected && chat.isUnlocked}
@@ -760,12 +725,19 @@
         <button
           type="button"
           class="menu-btn"
-          title="Chat options"
-          aria-label="Chat options"
-          onclick={() => { menuOpen = !menuOpen; }}
-        ><MoreHorizontal size={18} strokeWidth={2.25} /></button>
-        {#if menuOpen}
-          <div class="menu" role="menu">
+          title="Chat settings"
+          aria-label="Chat settings"
+          onclick={() => { chatSettingsOpen = true; }}
+        ><Settings size={17} strokeWidth={2.25} /></button>
+      </div>
+    </header>
+
+    {#if chatSettingsOpen}
+      <button class="settings-backdrop" aria-label="Close chat settings" onclick={() => chatSettingsOpen = false}></button>
+      <section class="chat-settings" aria-label="Chat settings">
+        <div class="settings-head"><div><strong>Chat settings</strong><div class="tiny muted">{chat.metadata.name}</div></div><button class="icon-close" title="Close" aria-label="Close" onclick={() => chatSettingsOpen = false}><X size={17} /></button></div>
+        <div class="settings-scroll">
+          <div class="settings-group"><span class="settings-label">Organization</span>
             <button type="button" onclick={() => openEditor("rename")}>Rename…</button>
             <button type="button" onclick={togglePin}>
               {chat.metadata.isPinned ? "Unpin" : "Pin"}
@@ -774,10 +746,11 @@
               {chat.metadata.isArchived ? "Unarchive" : "Archive"}
             </button>
             <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
+          </div>
+          <div class="settings-group"><span class="settings-label">Appearance</span>
             <button
               type="button"
               onclick={() => {
-                menuOpen = false;
                 void runMeta({ remoteMessagesOnLeft: !chat.metadata.remoteMessagesOnLeft });
               }}
             >{chat.metadata.remoteMessagesOnLeft ? "Keep all messages on right" : "Other devices on left"}</button>
@@ -793,16 +766,20 @@
             {#if chat.metadata.backgroundFile}
               <button type="button" onclick={clearBackground}>Remove background</button>
             {/if}
+          </div>
+          <div class="settings-group"><span class="settings-label">Privacy</span>
             {#if chat.metadata.isProtected}
               <button type="button" onclick={() => openPin("change")}>Change PIN…</button>
             {:else}
               <button type="button" onclick={() => openPin("protect")}>Protect chat…</button>
             {/if}
+          </div>
+          <div class="settings-group danger-group"><span class="settings-label">Data</span>
             <button type="button" class="danger" onclick={deleteChat}>Delete chat</button>
           </div>
-        {/if}
-      </div>
-    </header>
+        </div>
+      </section>
+    {/if}
 
     {#if editMode}
       <div class="meta-editor">
@@ -935,30 +912,21 @@
       {#if sendError}
         <div class="compose-error tiny">{sendError}</div>
       {/if}
-      {#if checklistOpen}
-        <div class="checklist-composer">
-          <div class="row" style="justify-content:space-between;">
-            <strong class="tiny">New checklist</strong>
-            <button type="button" class="text-btn" onclick={() => { checklistOpen = false; checklistText = ""; }}>
-              Cancel
-            </button>
-          </div>
-          <textarea
-            class="compose-input"
-            placeholder="One item per line"
-            bind:value={checklistText}
-            disabled={sending}
-            rows="4"
-          ></textarea>
-          <div class="row" style="justify-content:flex-end;">
-            <button
-              type="button"
-              class="send"
-              onclick={sendChecklist}
-              disabled={sending || !checklistText.trim()}
-            >
-              {sending ? "…" : "Send checklist"}
-            </button>
+      {#if formattingOpen}
+        <div class="format-row">
+          <button type="button" class="format-close" title="Close formatting" aria-label="Close formatting" onclick={() => formattingOpen = false}><X size={15} /></button>
+          <div class="format-toolbar" aria-label="Message formatting">
+            <button type="button" title="Bold" aria-label="Bold" onclick={() => applyWrap("**")}><Bold size={16} /></button>
+            <button type="button" title="Italic" aria-label="Italic" onclick={() => applyWrap("*")}><Italic size={16} /></button>
+            <button type="button" title="Strikethrough" aria-label="Strikethrough" onclick={() => applyWrap("~~")}><Strikethrough size={16} /></button>
+            <span class="format-separator"></span>
+            <button type="button" title="Heading 1" aria-label="Heading 1" onclick={() => applyLinePrefix("# ")}><Heading1 size={17} /></button>
+            <button type="button" title="Heading 2" aria-label="Heading 2" onclick={() => applyLinePrefix("## ")}><Heading2 size={17} /></button>
+            <button type="button" title="Heading 3" aria-label="Heading 3" onclick={() => applyLinePrefix("### ")}><Heading3 size={17} /></button>
+            <span class="format-separator"></span>
+            <button type="button" title="Bullet list" aria-label="Bullet list" onclick={() => applyLinePrefix("- ")}><List size={17} /></button>
+            <button type="button" title="Checklist" aria-label="Checklist" onclick={() => applyLinePrefix("- [ ] ")}><ListChecks size={17} /></button>
+            <button type="button" title="Code block" aria-label="Code block" onclick={insertCodeBlock}><Code2 size={17} /></button>
           </div>
         </div>
       {/if}
@@ -967,48 +935,46 @@
           <button
             type="button"
             class="attach"
-            title="Attach image"
-            aria-label="Attach image"
-            onclick={attachImage}
+            title="Add attachment or checklist"
+            aria-label="Add attachment or checklist"
+            aria-expanded={composeActionsOpen}
+            onclick={() => { composeActionsOpen = !composeActionsOpen; }}
             disabled={sending}
           >
             <Plus size={18} strokeWidth={2.25} />
           </button>
-          <button
-            type="button"
-            class="attach"
-            title="Attach file"
-            aria-label="Attach file"
-            onclick={attachFile}
-            disabled={sending}
-          >
-            <Paperclip size={18} strokeWidth={2.25} />
-          </button>
-          <button
-            type="button"
-            class="attach"
-            title="New checklist"
-            aria-label="New checklist"
-            onclick={() => { checklistOpen = !checklistOpen; }}
-            disabled={sending}
-          >
-            <ListChecks size={18} strokeWidth={2.25} />
-          </button>
+          {#if composeActionsOpen}
+            <button
+              type="button"
+              class="actions-backdrop"
+              aria-label="Close add menu"
+              onclick={() => { composeActionsOpen = false; }}
+            ></button>
+            <div class="actions-menu" role="menu">
+              <button type="button" role="menuitem" onclick={attach}>Attach file or image…</button>
+              <button type="button" role="menuitem" onclick={() => {
+                composeActionsOpen = false;
+                formattingOpen = !formattingOpen;
+              }}>{formattingOpen ? "Hide formatting" : "Formatting"}</button>
+              <button type="button" role="menuitem" onclick={() => {
+                composeActionsOpen = false;
+                void startRecording();
+              }}><Mic size={15} strokeWidth={2.25} /> Record voice message</button>
+            </div>
+          {/if}
+          {#if recording}
           <button
             type="button"
             class="attach"
             class:recording
-            title={recording ? "Stop recording" : "Record voice message"}
-            aria-label={recording ? "Stop recording" : "Record voice message"}
-            onclick={recording ? stopRecording : startRecording}
-            disabled={sending && !recording}
+            title="Stop recording"
+            aria-label="Stop recording"
+            onclick={stopRecording}
+            disabled={sending}
           >
-            {#if recording}
-              <Square size={16} strokeWidth={2.25} />
-            {:else}
-              <Mic size={18} strokeWidth={2.25} />
-            {/if}
+            <Square size={16} strokeWidth={2.25} />
           </button>
+          {/if}
         </div>
         {#if recording}
           <span class="rec-indicator" title="Recording…">
@@ -1022,6 +988,7 @@
           placeholder="Type a message…"
           bind:this={composeTextarea}
           bind:value={composeText}
+          oninput={resizeComposer}
           onkeydown={onKeyDown}
           oncontextmenu={openComposeMenu}
           disabled={sending}
@@ -1068,16 +1035,6 @@
     <button type="button" disabled={!hasSel} onclick={menuCut}>Cut</button>
     <button type="button" disabled={!hasSel} onclick={menuCopy}>Copy</button>
     <button type="button" onclick={menuPaste}>Paste</button>
-    <div class="ctx-sep"></div>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("**"))}><b>Bold</b></button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("*"))}><i>Italic</i></button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyWrap("~~"))}><s>Strikethrough</s></button>
-    <div class="ctx-sep"></div>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("# "))}>Heading 1</button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("## "))}>Heading 2</button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("### "))}>Heading 3</button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(() => applyLinePrefix("- "))}>Bullet list</button>
-    <button type="button" disabled={!hasSel} onclick={() => menuFormat(insertCodeBlock)}>Code block</button>
   </div>
 {/if}
 
@@ -1089,7 +1046,7 @@
     background: transparent;
   }
   .header {
-    padding: .9rem 1rem;
+    padding: .55rem .8rem;
     background: var(--surface);
     border-bottom: 1px solid var(--outline-variant);
     gap: .75rem;
@@ -1152,15 +1109,15 @@
     align-items: center;
     gap: .5rem;
   }
-  /* Connected segmented group for the +, checklist and mic buttons. */
+  /* Compact action group: one add menu plus the voice recorder. */
   .attach-group {
     display: inline-flex;
     align-items: stretch;
     flex-shrink: 0;
     align-self: center;
+    position: relative;
     border: 1px solid var(--outline-variant);
     border-radius: 12px;
-    overflow: hidden;
   }
   .compose-input {
     flex: 1;
@@ -1197,6 +1154,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    width: 2.5rem;
     padding: .45rem .6rem;
     border: none;
     border-radius: 0;
@@ -1206,7 +1164,9 @@
     cursor: pointer;
     line-height: 0;
   }
-  .attach + .attach { border-left: 1px solid var(--outline-variant); }
+  .attach-group > .attach:last-child { border-left: 1px solid var(--outline-variant); }
+  .attach:first-child { border-radius: 11px 0 0 11px; }
+  .attach:last-child { border-radius: 0 11px 11px 0; }
   .attach:hover:not(:disabled) {
     color: var(--text);
     background: var(--surface-2, var(--surface));
@@ -1219,6 +1179,53 @@
     color: var(--danger);
     background: color-mix(in oklab, var(--danger) 12%, transparent);
   }
+  .actions-backdrop,
+  .actions-backdrop:hover {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    border: none;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+    cursor: default;
+  }
+  .actions-menu {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + .45rem);
+    z-index: 31;
+    min-width: 190px;
+    display: flex;
+    flex-direction: column;
+    padding: .25rem;
+    background: var(--surface);
+    border: 1px solid var(--outline-variant);
+    border-radius: 12px;
+    box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25));
+  }
+  .actions-menu button {
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    padding: .5rem .7rem;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .actions-menu button:hover {
+    background: var(--surface-2, var(--surface));
+  }
+  .format-row { display:flex; align-items:center; gap:calc(.5rem + 2px); margin-bottom:.25rem; }
+  .format-close { display:inline-flex; align-items:center; justify-content:center; flex:0 0 2.5rem; width:2.5rem; height:2rem; padding:0; border:1px solid var(--outline-variant); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); }
+  .format-close:hover { background:var(--surface-hover); color:var(--text); filter:none; }
+  .format-toolbar { display:flex; align-items:center; gap:2px; width:max-content; padding:2px; border:1px solid var(--outline-variant); border-radius:var(--radius-sm); background:var(--surface-2, var(--surface)); }
+  .format-toolbar button { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:1.8rem; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-muted); }
+  .format-toolbar button:hover { background:var(--surface-hover); color:var(--text); filter:none; }
+  .format-separator { width:1px; height:1.15rem; margin:0 2px; background:var(--outline-variant); }
   .rec-indicator {
     display: inline-flex;
     align-items: center;
@@ -1284,11 +1291,6 @@
     opacity: .4;
     cursor: default;
   }
-  .ctx-sep {
-    height: 1px;
-    background: var(--outline-variant);
-    margin: .25rem .35rem;
-  }
   .compose-error {
     color: var(--error, #b00);
   }
@@ -1317,15 +1319,6 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .checklist-composer {
-    display: flex;
-    flex-direction: column;
-    gap: .35rem;
-    padding: .55rem .65rem;
-    border: 1px solid var(--outline-variant);
-    border-radius: 12px;
-    background: var(--surface-2, var(--surface));
   }
   .text-btn {
     background: transparent;
@@ -1407,40 +1400,27 @@
     align-items: center;
     justify-content: center;
     background: transparent;
-    border: 1px solid var(--outline-variant);
+    border: none;
     color: inherit;
     font: inherit;
     line-height: 0;
-    padding: .3rem;
+    padding: .4rem;
     border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .menu-btn:hover { background: var(--surface-2, var(--surface)); }
-  .menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + .35rem);
-    z-index: 20;
-    min-width: 160px;
-    display: flex;
-    flex-direction: column;
-    background: var(--surface);
-    border: 1px solid var(--outline-variant);
-    border-radius: 12px;
-    box-shadow: var(--shadow, 0 6px 24px rgba(0,0,0,.25));
-    overflow: hidden;
-  }
-  .menu button {
-    background: transparent;
-    border: none;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-    padding: .55rem .8rem;
-    cursor: pointer;
-  }
-  .menu button:hover { background: var(--surface-2, var(--surface)); }
-  .menu button.danger { color: var(--error, #b00); }
+  .settings-backdrop, .settings-backdrop:hover { position:fixed; inset:32px 0 0; z-index:50; margin:0; padding:0; border:0; border-radius:0; background:rgba(0,0,0,.34); box-shadow:none; }
+  .chat-settings { position:fixed; top:32px; right:0; bottom:0; z-index:51; width:min(380px, 100vw); display:flex; flex-direction:column; background:var(--surface); border-left:1px solid var(--outline-variant); box-shadow:-10px 0 30px rgba(0,0,0,.2); }
+  .settings-head { display:flex; align-items:center; justify-content:space-between; padding:1rem; border-bottom:1px solid var(--outline-variant); }
+  .icon-close { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:2rem; padding:0; border:0; background:transparent; color:var(--text-muted); }
+  .icon-close:hover { background:var(--surface-hover); color:var(--text); filter:none; }
+  .settings-scroll { overflow:auto; padding:.75rem; }
+  .settings-group { display:flex; flex-direction:column; padding:.4rem 0 .75rem; border-bottom:1px solid var(--outline-variant); }
+  .settings-label { padding:.35rem .6rem; color:var(--text-muted); font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+  .settings-group button { border:0; background:transparent; color:inherit; text-align:left; padding:.6rem; border-radius:8px; font:inherit; }
+  .settings-group button:hover { background:var(--surface-hover); filter:none; }
+  .settings-group button.danger { color:var(--error, #b00); }
+  .danger-group { border-bottom:0; }
   .meta-editor {
     display: flex;
     align-items: center;

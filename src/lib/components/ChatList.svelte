@@ -1,8 +1,14 @@
 <script lang="ts">
-  import { activeChatId, visibleChats, selectChat, allTags, activeTag, profileBuckets, activeProfileId, refreshChats, refreshActiveChat } from "../stores/app";
+  import { activeChatId, visibleChats, selectChat, allTags, activeTag, profileBuckets, activeProfileId, showArchived, refreshChats, refreshActiveChat } from "../stores/app";
   import { api, type ChatSummary } from "../ipc";
   import ChatListItem from "./ChatListItem.svelte";
-  import { Plus } from "@lucide/svelte";
+  import SearchPane from "./chatpane/SearchPane.svelte";
+  import { Check, Filter, Plus, Search } from "@lucide/svelte";
+
+  let filtersOpen = $state(false);
+  let query = $state("");
+  const activeVisibleChats = $derived($visibleChats.filter((chat) => !chat.isArchived));
+  const archivedVisibleChats = $derived($visibleChats.filter((chat) => chat.isArchived));
 
   function setTag(t: string | null) {
     activeTag.set(t);
@@ -201,25 +207,35 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="wrap col">
-  {#if $profileBuckets.length > 1}
-    <div class="row profiles">
-      <div class="chip-seg">
-        <button
-          class="chip-seg-btn"
-          class:active={$activeProfileId === null}
-          onclick={() => setProfile(null)}
-        >All</button>
-        {#each $profileBuckets as p (p.id)}
-          <button
-            class="chip-seg-btn"
-            class:active={$activeProfileId === p.id}
-            onclick={() => setProfile(p.id)}
-            title={p.name}
-          >{p.name}</button>
-        {/each}
+  <div class="filter-row">
+      <div class="search-box">
+        <Search size={15} strokeWidth={2.25} aria-hidden="true" />
+        <input type="search" placeholder="Search chats & messages…" bind:value={query} aria-label="Search chats and messages" />
       </div>
-    </div>
-  {/if}
+      <button class="filter-btn" class:active={$activeProfileId !== null || $activeTag !== null || $showArchived} onclick={() => filtersOpen = !filtersOpen} aria-expanded={filtersOpen} title="Filter chats" aria-label="Filter chats">
+        <Filter size={14} strokeWidth={2.25} />
+      </button>
+      {#if filtersOpen}
+        <button class="filter-backdrop" aria-label="Close filters" onclick={() => filtersOpen = false}></button>
+        <div class="filter-menu">
+          <strong class="tiny muted">Profile</strong>
+          <button onclick={() => setProfile(null)}><span>All chats</span>{#if $activeProfileId === null}<Check size={14} />{/if}</button>
+          {#each $profileBuckets as p (p.id)}
+            <button onclick={() => setProfile(p.id)}><span>{p.name}</span>{#if $activeProfileId === p.id}<Check size={14} />{/if}</button>
+          {/each}
+          {#if $allTags.length}
+            <strong class="tiny muted">Tag</strong>
+            <button onclick={() => setTag(null)}><span>Any tag</span>{#if $activeTag === null}<Check size={14} />{/if}</button>
+            {#each $allTags as t (t)}
+              <button onclick={() => setTag(t)}><span>#{t}</span>{#if $activeTag === t}<Check size={14} />{/if}</button>
+            {/each}
+          {/if}
+          <div class="filter-separator"></div>
+          <strong class="tiny muted">Visibility</strong>
+          <button onclick={() => showArchived.update((v) => !v)}><span>Show archived chats</span>{#if $showArchived}<Check size={14} />{/if}</button>
+        </div>
+      {/if}
+  </div>
 
   {#if creating}
     <div class="row create">
@@ -304,39 +320,36 @@
       </div>
     </div>
   {/if}
-  {#if $allTags.length}
-    <div class="row tags">
-      <div class="chip-seg">
-        <button
-          class="chip-seg-btn"
-          class:active={$activeTag === null}
-          onclick={() => setTag(null)}
-        >all</button>
-        {#each $allTags as t (t)}
-          <button
-            class="chip-seg-btn"
-            class:active={$activeTag === t}
-            onclick={() => setTag(t)}
-          >#{t}</button>
-        {/each}
-      </div>
-    </div>
-  {/if}
-
+  {#if query.trim()}
+    <div class="search-results"><SearchPane {query} /></div>
+  {:else}
   <div class="list scroll divided-list">
-    {#each $visibleChats as c (c.id)}
+    {#each activeVisibleChats as c (c.id)}
       <ChatListItem
         chat={c}
         selected={$activeChatId === c.id}
         onclick={() => selectChat(c.id)}
         oncontextmenu={(e) => openCtx(e, c)}
       />
-    {:else}
-      <div class="empty muted">No chats yet. Create one with +, or pair a phone to sync.</div>
     {/each}
+    {#if archivedVisibleChats.length}
+      <div class="chat-section-label tiny muted">Archived chats</div>
+      {#each archivedVisibleChats as c (c.id)}
+        <ChatListItem
+          chat={c}
+          selected={$activeChatId === c.id}
+          onclick={() => selectChat(c.id)}
+          oncontextmenu={(e) => openCtx(e, c)}
+        />
+      {/each}
+    {/if}
+    {#if !activeVisibleChats.length && !archivedVisibleChats.length}
+      <div class="empty muted">No chats yet. Create one with +, or pair a phone to sync.</div>
+    {/if}
   </div>
+  {/if}
 
-  {#if !creating}
+  {#if !creating && !query.trim()}
     <button class="fab" title="New chat" aria-label="New chat" onclick={startCreate}>
       <Plus size={22} strokeWidth={2.5} />
     </button>
@@ -352,16 +365,8 @@
     oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }}
   ></button>
   <div class="ctx-menu" role="menu" style={`left:${ctx.x}px; top:${ctx.y}px;`}>
-    <button type="button" onclick={ctxRename}>Rename…</button>
     <button type="button" onclick={ctxTogglePin}>{ctx.chat.isPinned ? "Unpin" : "Pin"}</button>
     <button type="button" onclick={ctxToggleArchive}>{ctx.chat.isArchived ? "Unarchive" : "Archive"}</button>
-    <button type="button" onclick={ctxTags}>Edit tags…</button>
-    {#if ctx.chat.isProtected}
-      <button type="button" onclick={() => openPin("change")}>Change PIN…</button>
-    {:else}
-      <button type="button" onclick={() => openPin("protect")}>Protect chat…</button>
-    {/if}
-    <button type="button" class="danger" onclick={ctxDelete}>Delete chat</button>
   </div>
 {/if}
 
@@ -461,41 +466,19 @@
     font: inherit;
     cursor: pointer;
   }
-  .tags {
-    padding: .5rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .profiles {
-    gap: .25rem;
-    padding: .5rem;
-    border-bottom: 1px solid var(--border);
-  }
-  /* Connected segmented control for the profile buckets. */
-  .chip-seg {
-    display: inline-flex;
-    align-items: stretch;
-    max-width: 100%;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-  }
-  .chip-seg-btn {
-    background: transparent;
-    color: var(--text-muted);
-    border: none;
-    border-radius: 0;
-    padding: .3rem .65rem;
-    font-size: .8rem;
-    font-weight: 500;
-    line-height: 1.2;
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .chip-seg-btn + .chip-seg-btn { border-left: 1px solid var(--border-strong); }
-  .chip-seg-btn:hover:not(.active) { background: var(--surface-hover); color: var(--text); }
-  .chip-seg-btn.active { background: var(--accent); color: var(--accent-contrast); }
+  .filter-row { position: relative; display:flex; gap:.35rem; padding:.45rem; border-bottom: 1px solid var(--border); }
+  .search-box { flex:1; min-width:0; display:flex; align-items:center; gap:.4rem; padding:0 .55rem; border:1px solid var(--border); background:var(--surface); color:var(--text-muted); border-radius:var(--radius-sm); }
+  .search-box:focus-within { border-color:var(--accent); color:var(--accent); }
+  .search-box input { width:100%; min-width:0; padding:.38rem 0; border:0; outline:0; background:transparent; color:var(--text); font:inherit; }
+  .filter-btn { display:flex; align-items:center; justify-content:center; flex:0 0 2rem; width:2rem; padding:0; border:0; background:transparent; color:var(--text-muted); border-radius:var(--radius-sm); }
+  .filter-btn:hover { background:var(--surface-hover); color:var(--text); filter:none; }
+  .filter-btn.active { color:var(--accent); background:color-mix(in oklab, var(--accent) 14%, transparent); }
+  .filter-backdrop, .filter-backdrop:hover { position:fixed; inset:0; z-index:20; border:0; background:transparent; }
+  .filter-menu { position:absolute; z-index:21; top:calc(100% - .25rem); left:.45rem; right:.45rem; display:flex; flex-direction:column; padding:.3rem; max-height:20rem; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); box-shadow:var(--shadow); }
+  .filter-menu strong { padding:.45rem .55rem .2rem; }
+  .filter-separator { height:1px; margin:.35rem .25rem .1rem; background:var(--outline-variant); }
+  .filter-menu button { display:flex; justify-content:space-between; align-items:center; border:0; background:transparent; color:inherit; padding:.45rem .55rem; border-radius:5px; text-align:left; }
+  .filter-menu button:hover { background:var(--surface-hover); }
   /* The outer ChatListPane supplies the frame; keep only the row dividers here. */
   .list {
     flex: 1;
@@ -505,6 +488,8 @@
     border: none;
     border-radius: 0;
   }
+  .search-results { flex:1; min-height:0; overflow:hidden; }
+  .chat-section-label { padding:.65rem .65rem .35rem; border-top:1px solid var(--border); font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
   .list > :global(.row-btn:last-child) {
     border-bottom: 1px solid var(--border);
   }
@@ -553,5 +538,4 @@
     cursor: pointer;
   }
   .ctx-menu button:hover { background: var(--surface-2, var(--surface)); }
-  .ctx-menu button.danger { color: var(--error, #b00); }
 </style>

@@ -31,7 +31,7 @@
     {#if loading}
       <div class="muted center tiny">Loading…</div>
     {:else if hits.length === 0}
-      <div class="muted center tiny">No starred messages yet.</div>
+      <div class="muted center tiny">No favorites</div>
     {:else}
       <ul class="hits divided-list">
         {#each hits as h (h.message.id)}

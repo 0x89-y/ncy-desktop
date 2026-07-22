@@ -1,6 +1,6 @@
 [package]
 name = "ncy-desktop"
-version = "0.7.0"
+version = "0.7.1"
 description = "Desktop client for Ncy"
 authors = ["0x89-y"]
 edition = "2021"
@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0.3", features = [] }
 
 [dependencies]
+chrono = "0.4"
 # The UI-agnostic core (event log, sync engine, storage, transcription) lives in
 # its own crate, shared with the headless `ncy-server`. Path dep for local dev;
 # switch to a pinned git dep for CI/release.

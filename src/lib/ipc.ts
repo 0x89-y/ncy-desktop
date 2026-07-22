@@ -181,6 +181,13 @@ export type DesktopPrefs = {
   launchOnStartup: boolean;
   askBeforeDeleting: boolean;
   autoCheckUpdates: boolean;
+  autoBackupEnabled: boolean;
+  autoBackupIntervalHours: number;
+  autoBackupFolder: string | null;
+  /** Null keeps every automatic backup. */
+  autoBackupRetention: number | null;
+  lastAutoBackupAt: number | null;
+  lastAutoBackupError: string | null;
   /** Run the LAN sync stack (WS listener, mDNS, outbound peers). Off by default
    *  for fresh installs — Ncy works standalone and sync is opt-in. */
   syncServerEnabled: boolean;
@@ -197,8 +204,14 @@ export type ImageView = {
 
 export type WhisperStatus = {
   cliPresent: boolean;
+  /** Exact version for a runtime installed by Ncy; null for manual installs. */
+  runtimeVersion: string | null;
   modelPresent: boolean;
   modelSizeBytes: number | null;
+  modelId: string;
+  modelLabel: string;
+  cachedModelIds: string[];
+  unusedModelBytes: number;
   /** Absolute path to the folder where the CLI + model live. Surfaced so the
    *  Settings UI can print it verbatim and offer an "Open folder" button. */
   dir: string;
@@ -209,7 +222,7 @@ export type WhisperStatus = {
 };
 
 export type TranscriptionEventPayload =
-  | { kind: "download-progress"; written: number; total: number }
+  | { kind: "download-progress"; stage?: "runtime" | "model"; written: number; total: number }
   | { kind: "download-complete" }
   | { kind: "download-error"; message: string };
 
@@ -330,6 +343,8 @@ export const api = {
     invoke<void>("author_clear_chat_background", { chatId }),
   authorToggleChecklistItem: (chatId: string, messageId: string, itemId: string) =>
     invoke<void>("author_toggle_checklist_item", { chatId, messageId, itemId }),
+  authorToggleTextChecklistBlock: (chatId: string, messageId: string, blockIndex: number) =>
+    invoke<void>("author_toggle_text_checklist_block", { chatId, messageId, blockIndex }),
   authorUpdateChatMeta: (
     chatId: string,
     patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[]; remoteMessagesOnLeft?: boolean },
@@ -370,6 +385,7 @@ export const api = {
   // Standalone backup / restore (desktop's own data — events + blobs).
   exportBackup: (destPath: string) =>
     invoke<void>("export_backup", { destPath }),
+  runAutomaticBackup: () => invoke<string>("run_automatic_backup"),
   importBackup: (srcPath: string) =>
     invoke<{ chats: number; events: number; blobs: number }>("import_backup", {
       srcPath,
@@ -388,6 +404,11 @@ export const api = {
 
   // Voice transcription (local whisper.cpp via subprocess).
   transcriptionStatus: () => invoke<WhisperStatus>("transcription_status"),
+  transcriptionSetup: () => invoke<void>("transcription_setup"),
+  transcriptionSelectModel: (modelId: string) =>
+    invoke<void>("transcription_select_model", { modelId }),
+  transcriptionRemoveUnusedModels: () =>
+    invoke<number>("transcription_remove_unused_models"),
   transcriptionDownloadModel: () =>
     invoke<void>("transcription_download_model"),
   transcriptionDeleteModel: () =>
