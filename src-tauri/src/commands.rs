@@ -753,6 +753,10 @@ pub async fn update_settings(
     // attempt retry startup.
     crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
     *state.settings.write().await = settings.clone();
+    state.automatic_file_download_limit_bytes.store(
+        settings.automatic_file_download_limit_bytes,
+        std::sync::atomic::Ordering::Relaxed,
+    );
 
     let sync_running = state.sync_shutdown.lock().unwrap().is_some();
     if sync_running {
@@ -1286,10 +1290,12 @@ pub async fn author_edit_text(
     state: State<'_, AppState>,
     chat_id: String,
     message_id: String,
-    text: String,
+    blocks: Vec<RichTextBlock>,
 ) -> Result<(), String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let has_text = blocks.iter().any(|block| {
+        block.spans.iter().any(|span| !span.text.trim().is_empty())
+    });
+    if !has_text {
         return Err("edit cannot be empty".to_string());
     }
     let key = state.keystore.key_for(&chat_id);
@@ -1297,19 +1303,7 @@ pub async fn author_edit_text(
     if !matches!(msg.message_type, MessageType::Text) {
         return Err("only TEXT messages support plaintext edit from desktop".to_string());
     }
-    msg.content = vec![RichTextBlock {
-        block_type: BlockType::Paragraph,
-        spans: vec![RichTextSpan {
-            text: trimmed.to_string(),
-            bold: false,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            color: None,
-            link: None,
-            inline_image: None,
-        }],
-    }];
+    msg.content = blocks;
     msg.edited_at = Some(now_ms());
     author_message(state.inner(), &chat_id, op_type::MESSAGE_EDITED, &msg)
 }
@@ -1909,6 +1903,26 @@ pub async fn blob_exists(
 ) -> Result<bool, String> {
     validate_blob_ref(&hash, &media_type)?;
     Ok(state.blobs.exists(&hash, &media_type))
+}
+
+#[tauri::command]
+pub async fn download_blob_anyway(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<(), String> {
+    validate_blob_ref(&hash, &media_type)?;
+    if media_type != "file" {
+        return Err("manual download is only available for file attachments".into());
+    }
+    if state.blobs.exists(&hash, &media_type) {
+        return Ok(());
+    }
+    state
+        .blob_requests
+        .send(crate::sync::ManualBlobRequest { hash, media_type })
+        .map_err(|_| "no connected device is available to provide this file".to_string())?;
+    Ok(())
 }
 
 /** Stream/copy an opaque blob to a path chosen by the user without base64 IPC. */

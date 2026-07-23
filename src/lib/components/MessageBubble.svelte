@@ -4,6 +4,7 @@
   import { api, extractMediaHash } from "../ipc";
   import {
     arrivedBlobs,
+    settings,
     transcribing,
     transcriptionErrors,
     quickReactions,
@@ -15,6 +16,7 @@
   import { openViewer } from "../stores/viewer";
   import RichText from "./RichText.svelte";
   import { formatFullTime, formatMessageTime, replyPreviewText } from "../format";
+  import { parseMarkdown } from "../markdown";
   import {
     Mic,
     Image as ImageIcon,
@@ -212,7 +214,15 @@
   // from the desktop (no rich formatting).
   function flattenContent(m: Message): string {
     return m.content
-      .map((b) => b.spans.map((s) => s.text).join(""))
+      .map((b) => {
+        const text = b.spans.map((s) => s.text).join("");
+        if (b.type === "BULLET_LIST") return `- ${text}`;
+        if (b.type === "HEADING1") return `# ${text}`;
+        if (b.type === "HEADING2") return `## ${text}`;
+        if (b.type === "HEADING3") return `### ${text}`;
+        if (b.type === "CODE_BLOCK") return `\`\`\`\n${text}\n\`\`\``;
+        return text;
+      })
       .join("\n");
   }
 
@@ -279,7 +289,7 @@
     busy = true;
     editError = null;
     try {
-      await api.authorEditText(message.chatId, message.id, text);
+      await api.authorEditBlocks(message.chatId, message.id, parseMarkdown(text));
       editing = false;
     } catch (e: any) {
       editError = typeof e === "string" ? e : (e?.message ?? "edit failed");
@@ -326,6 +336,14 @@
   let imageMissing = $state(false);
   let fileAvailable = $state(false);
   let fileSaving = $state(false);
+  let fileManuallyRequested = $state(false);
+  const fileDeferred = $derived(
+    !fileAvailable &&
+      !fileManuallyRequested &&
+      fileAttachment?.sizeBytes != null &&
+      fileAttachment.sizeBytes >
+        ($settings?.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024),
+  );
 
   const voiceDurationSeconds = $derived(
     voiceMetadataDuration ?? (message.voiceDurationMs ?? 0) / 1000,
@@ -476,6 +494,17 @@
       console.error("save file", e);
     } finally {
       fileSaving = false;
+    }
+  }
+
+  async function downloadFileAnyway() {
+    if (!fileHash || fileManuallyRequested) return;
+    fileManuallyRequested = true;
+    try {
+      await api.downloadBlobAnyway(fileHash);
+    } catch (e) {
+      fileManuallyRequested = false;
+      console.error("manual blob download", e);
     }
   }
 </script>
@@ -668,16 +697,29 @@
         <button
           type="button"
           class="file-card"
-          disabled={!fileAvailable || fileSaving}
-          onclick={() => void downloadFile()}
-          title={fileAvailable ? "Save file" : "Downloading file"}
+          disabled={(!fileAvailable && !fileDeferred) || fileSaving}
+          onclick={() => fileDeferred ? void downloadFileAnyway() : void downloadFile()}
+          title={fileAvailable ? "Save file" : fileDeferred ? "Download anyway" : "Downloading file"}
         >
           <Paperclip size={20} strokeWidth={2.1} />
           <span class="file-info">
             <strong>{fileAttachment.name}</strong>
-            <small>{formatFileSize(fileAttachment.sizeBytes)}{fileAvailable ? "" : " · downloading…"}</small>
+            <small>
+              {formatFileSize(fileAttachment.sizeBytes)}
+              {fileAvailable
+                ? ""
+                : fileDeferred
+                  ? ($settings?.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024) === 0
+                    ? " · automatic downloads are set to Always ask"
+                    : ` · above your ${formatFileSize($settings?.automaticFileDownloadLimitBytes)} automatic download limit`
+                  : " · downloading…"}
+            </small>
           </span>
-          <Download size={17} strokeWidth={2.1} />
+          {#if fileDeferred}
+            <span class="tiny">Download anyway</span>
+          {:else}
+            <Download size={17} strokeWidth={2.1} />
+          {/if}
         </button>
       {:else}
         <div class="row muted tiny"><Paperclip size={14} /><span>File</span></div>

@@ -170,6 +170,8 @@ export type AppSettings = {
   transcriptionEnabled: boolean;
   /** Connection routing policy. Pear is opt-in; fresh installs use localOnly. */
   syncTransportMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
+  /** Local-only threshold for automatic generic file downloads. */
+  automaticFileDownloadLimitBytes: number;
 };
 
 export type DesktopPrefs = {
@@ -309,8 +311,8 @@ export const api = {
     invoke<void>("author_toggle_star", { chatId, messageId }),
   authorToggleReaction: (chatId: string, messageId: string, emoji: string) =>
     invoke<void>("author_toggle_reaction", { chatId, messageId, emoji }),
-  authorEditText: (chatId: string, messageId: string, text: string) =>
-    invoke<void>("author_edit_text", { chatId, messageId, text }),
+  authorEditBlocks: (chatId: string, messageId: string, blocks: RichTextBlock[]) =>
+    invoke<void>("author_edit_text", { chatId, messageId, blocks }),
   authorDeleteMessage: (chatId: string, messageId: string) =>
     invoke<void>("author_delete_message", { chatId, messageId }),
   authorSendImage: (chatId: string, sourcePath: string, replyToId: string | null = null) =>
@@ -372,6 +374,8 @@ export const api = {
     invoke<string | null>("read_blob", { hash, mediaType }),
   blobExists: (hash: string, mediaType: MediaType) =>
     invoke<boolean>("blob_exists", { hash, mediaType }),
+  downloadBlobAnyway: (hash: string) =>
+    invoke<void>("download_blob_anyway", { hash, mediaType: "file" }),
   saveBlob: (hash: string, mediaType: MediaType, dest: string) =>
     invoke<void>("save_blob", { hash, mediaType, dest }),
 

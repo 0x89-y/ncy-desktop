@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.2 — 2026-07-24
+
+### Added
+
+- Added a configurable automatic file-download limit with an explicit download action for
+  files above the local limit.
+
+### Changed
+
+- Increased the temporary absolute file-transfer ceiling to 1 GiB.
+- Already-paired devices now use the existing remove action instead of offering credential
+  rotation as an additional replacement workflow.
+
+### Fixed
+
+- Fixed edited Markdown checklists losing their task markers or collapsing their labels.
+- Fixed the bundled Bare runtime remaining active after Ncy had fully exited.
+- Updated Core's authentication and encryption calls to remove deprecated generic-array API
+  warnings.
+
 ## 0.7.0 — 2026-07-19
 
 ### Added

@@ -40,6 +40,10 @@ transcription_enabled = false
 # already paired via QR/JSON; it does not discover unknown Ncy devices.
 sync_transport_mode = "localOnly"
 
+# Generic attachments larger than this remain metadata-only until manually requested.
+# 0 means always ask; the current hard safety ceiling is 1024 MB.
+automatic_file_download_limit_mb = 100
+
 # Required only when a Pear-enabled policy is selected. Point these at the
 # packaged Bare runtime and Ncy Pear bundle. Keep the bundle's adjacent
 # out/node_modules directory intact because it contains native addons.

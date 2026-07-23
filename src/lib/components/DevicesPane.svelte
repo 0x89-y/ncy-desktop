@@ -341,9 +341,11 @@
                     {showBox ? "Hide" : "Show more"}
                   </button>
                 {/if}
-                <button class="ghost" onclick={() => rotate(p.pairing)}>
-                  {claimed ? "Rotate credential" : "Replace code"}
-                </button>
+                {#if !claimed}
+                  <button class="ghost" onclick={() => rotate(p.pairing)}>
+                    Replace code
+                  </button>
+                {/if}
                 <button
                   class="icon-btn"
                   onclick={() => remove(p.pairing.id)}

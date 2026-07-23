@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.2 — 2026-07-24
+
+### Added
+
+- Added a configurable automatic file-download limit for server-managed transfers.
+
+### Changed
+
+- Increased the temporary absolute file-transfer ceiling to 1 GiB.
+
+### Fixed
+
+- Fixed the bundled Bare runtime remaining active after the server had fully exited.
+- Updated shared authentication and encryption code to remove deprecated generic-array API
+  warnings.
+
 ## 0.7.1 — 2026-07-22
 
 ### Changed

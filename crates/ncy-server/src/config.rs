@@ -39,6 +39,8 @@ pub struct Config {
     /// Connection routing policy. `localOnly` is the default and never starts
     /// the Pear worker.
     pub sync_transport_mode: SyncTransportMode,
+    /// Generic files above this size remain metadata-only on this server.
+    pub automatic_file_download_limit_mb: u64,
     /// Bare runtime and bundled Ncy Pear worker. Required for Pear-enabled modes.
     pub pear_runtime_path: Option<PathBuf>,
     pub pear_bundle_path: Option<PathBuf>,
@@ -54,6 +56,7 @@ impl Default for Config {
             discoverable: false,
             transcription_enabled: false,
             sync_transport_mode: SyncTransportMode::LocalOnly,
+            automatic_file_download_limit_mb: 100,
             pear_runtime_path: None,
             pear_bundle_path: None,
         }

@@ -60,6 +60,7 @@
   let discoverable = $state(false);
   let transcriptionEnabled = $state(false);
   let syncTransportMode = $state<AppSettings["syncTransportMode"]>("localOnly");
+  let automaticFileDownloadLimitBytes = $state(100 * 1024 * 1024);
   let desktopPrefs = $state<DesktopPrefs>({
     startMinimized: false,
     closeToTray: false,
@@ -112,6 +113,8 @@
       discoverable = $settings.discoverable;
       transcriptionEnabled = $settings.transcriptionEnabled ?? false;
       syncTransportMode = $settings.syncTransportMode ?? "localOnly";
+      automaticFileDownloadLimitBytes =
+        $settings.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024;
       dirty = false;
     }
   });
@@ -121,7 +124,16 @@
   }
 
   function settingsPayload(): AppSettings {
-    return { port, deviceName, theme, discoverable, accent, transcriptionEnabled, syncTransportMode };
+    return {
+      port,
+      deviceName,
+      theme,
+      discoverable,
+      accent,
+      transcriptionEnabled,
+      syncTransportMode,
+      automaticFileDownloadLimitBytes,
+    };
   }
 
   async function changeTransportMode(event: Event) {
@@ -618,6 +630,43 @@
             {showSyncAdvanced ? "Hide advanced" : "Advanced"}
           </button>
         </div>
+      </label>
+      <label class="field">
+        <span class="field-label">Automatic file downloads</span>
+        <select
+          value={automaticFileDownloadLimitBytes}
+          onchange={(event) => {
+            automaticFileDownloadLimitBytes = Number(
+              (event.currentTarget as HTMLSelectElement).value,
+            );
+            markDirty();
+          }}
+        >
+          <option value={0}>Always ask</option>
+          <option value={25 * 1024 * 1024}>25 MB</option>
+          <option value={100 * 1024 * 1024}>100 MB</option>
+          <option value={250 * 1024 * 1024}>250 MB</option>
+          <option value={500 * 1024 * 1024}>500 MB</option>
+          <option value={1024 * 1024 * 1024}>1 GB</option>
+        </select>
+        <input
+          type="number"
+          min="0"
+          max="1024"
+          step="1"
+          value={Math.round(automaticFileDownloadLimitBytes / (1024 * 1024))}
+          aria-label="Custom automatic file download limit in megabytes"
+          oninput={(event) => {
+            const mib = Math.max(
+              0,
+              Math.min(1024, Number((event.currentTarget as HTMLInputElement).value) || 0),
+            );
+            automaticFileDownloadLimitBytes = mib * 1024 * 1024;
+            markDirty();
+          }}
+        />
+        <span class="tiny muted">Custom limit in MB (0 means Always ask).</span>
+        <span class="tiny muted">Larger files remain available to download manually.</span>
       </label>
       {#if showSyncAdvanced}
       {#if $identity}

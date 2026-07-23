@@ -57,6 +57,14 @@ pub async fn run(config: Config) -> Result<()> {
 
     let (bus, _initial_rx) = broadcast::channel::<SyncEvent>(256);
     let (outbound, _initial_outbound_rx) = broadcast::channel::<OutboundEvent>(256);
+    let (blob_requests, _) =
+        broadcast::channel::<ncy_core::sync::ManualBlobRequest>(64);
+    let automatic_file_download_limit_bytes = Arc::new(std::sync::atomic::AtomicU64::new(
+        config
+            .automatic_file_download_limit_mb
+            .min(1024)
+            .saturating_mul(1024 * 1024),
+    ));
 
     // Seed the clock from the highest HLC already on disk so we never author an
     // event that's causally behind something we've stored.
@@ -112,6 +120,9 @@ pub async fn run(config: Config) -> Result<()> {
             clock: clock.clone(),
             outbound: outbound.clone(),
             blobs: blobs.clone(),
+            automatic_file_download_limit_bytes:
+                automatic_file_download_limit_bytes.clone(),
+            blob_requests: blob_requests.clone(),
             server_status: server_status.clone(),
             server_addr: server_addr.clone(),
             // Discovery-initiated pair requests park a oneshot here for a UI to
@@ -153,6 +164,9 @@ pub async fn run(config: Config) -> Result<()> {
             clock: clock.clone(),
             outbound: outbound.clone(),
             blobs: blobs.clone(),
+            automatic_file_download_limit_bytes:
+                automatic_file_download_limit_bytes.clone(),
+            blob_requests: blob_requests.clone(),
             peers: peers.clone(),
             peers_path: paths.peers.clone(),
             transport_mode,
@@ -193,7 +207,7 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     tracing::info!("ncy-server up. Type 'help' for commands; Ctrl-C to stop.");
-    wait_for_shutdown(&config, pairings, &paths.pairings).await;
+    wait_for_shutdown(&config, pairings, &paths.pairings, blob_requests).await;
     tracing::info!("shutting down");
     if let Some(sidecar) = pear_sidecar {
         sidecar.shutdown().await;
@@ -277,10 +291,11 @@ async fn wait_for_shutdown(
     config: &Config,
     pairings: Arc<RwLock<PairingFile>>,
     pairings_path: &std::path::Path,
+    blob_requests: broadcast::Sender<ncy_core::sync::ManualBlobRequest>,
 ) {
     tokio::select! {
         _ = wait_for_os_shutdown() => {}
-        _ = console_loop(config, pairings, pairings_path) => {}
+        _ = console_loop(config, pairings, pairings_path, blob_requests) => {}
     }
 }
 
@@ -357,6 +372,7 @@ async fn console_loop(
     config: &Config,
     pairings: Arc<RwLock<PairingFile>>,
     pairings_path: &std::path::Path,
+    blob_requests: broadcast::Sender<ncy_core::sync::ManualBlobRequest>,
 ) {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -386,6 +402,23 @@ async fn console_loop(
             }
             "pairings" => pair::list(config),
             "peers" => pair::list_peers(config),
+            "download" if !argument.is_empty() => {
+                if argument.len() != 64
+                    || !argument
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                {
+                    Err(anyhow::anyhow!("usage: download <64-character-lowercase-hash>"))
+                } else {
+                    blob_requests
+                        .send(ncy_core::sync::ManualBlobRequest {
+                            hash: argument.to_owned(),
+                            media_type: "file".to_owned(),
+                        })
+                        .map(|_| ())
+                        .map_err(|_| anyhow::anyhow!("no connected device can provide the file"))
+                }
+            }
             "rotate" if !argument.is_empty() => match pair::rotate(config, argument) {
                 Ok(()) => reload_pairings(pairings_path, &pairings).await,
                 Err(error) => Err(error),
@@ -401,6 +434,7 @@ async fn console_loop(
             "stop" | "quit" | "exit" => return,
             "rotate" => Err(anyhow::anyhow!("usage: rotate <pairing-id>")),
             "revoke" => Err(anyhow::anyhow!("usage: revoke <pairing-id>")),
+            "download" => Err(anyhow::anyhow!("usage: download <file-hash>")),
             _ => Err(anyhow::anyhow!("unknown command '{command}'; type 'help'")),
         };
         if let Err(error) = result {
@@ -414,6 +448,7 @@ fn print_console_help() {
     println!("  pair [name]       Create and activate a pairing, then print JSON and QR");
     println!("  pairings          List pairing slots without secrets");
     println!("  peers             List outbound peer diagnostics");
+    println!("  download <hash>   Download a deferred file from a connected device");
     println!("  rotate <id>       Rotate a pairing credential");
     println!("  revoke <id>       Revoke and remove a pairing credential");
     println!("  stop              Shut down the server");

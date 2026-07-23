@@ -12,7 +12,7 @@ use std::sync::{Arc, RwLock as StdRwLock};
 
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tokio::sync::{broadcast, Notify, RwLock};
 
 use crate::model::HlcTimestamp;
@@ -40,6 +40,8 @@ pub struct AppState {
     pub clock: Arc<DesktopClock>,
     pub outbound: OutboundTx,
     pub blobs: Arc<BlobStore>,
+    pub automatic_file_download_limit_bytes: Arc<std::sync::atomic::AtomicU64>,
+    pub blob_requests: broadcast::Sender<crate::sync::ManualBlobRequest>,
     /// Phase 3: in-memory per-chat decryption keys, derived from the PIN on unlock.
     pub keystore: Arc<ProtectionKeyStore>,
     /// Queryable WS server status — closes the startup race where the webview
@@ -349,6 +351,11 @@ pub fn run() {
             let blobs = Arc::new(BlobStore::open(&paths.blobs)?);
             let (bus, _initial_rx) = broadcast::channel::<SyncEvent>(256);
             let (outbound, _initial_outbound_rx) = broadcast::channel::<OutboundEvent>(256);
+            let (blob_requests, _) =
+                broadcast::channel::<crate::sync::ManualBlobRequest>(64);
+            let automatic_file_download_limit_bytes = Arc::new(
+                std::sync::atomic::AtomicU64::new(settings.automatic_file_download_limit_bytes),
+            );
             let advertised_host = network::best_lan_ip();
 
             // Seed the desktop's HLC from whatever's already on disk so we never
@@ -415,6 +422,9 @@ pub fn run() {
                 clock: clock.clone(),
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
+                automatic_file_download_limit_bytes:
+                    automatic_file_download_limit_bytes.clone(),
+                blob_requests: blob_requests.clone(),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
                 pairing_registry: pairing_registry.clone(),
@@ -433,6 +443,9 @@ pub fn run() {
                 clock: clock.clone(),
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
+                automatic_file_download_limit_bytes:
+                    automatic_file_download_limit_bytes.clone(),
+                blob_requests: blob_requests.clone(),
                 peers: peers.clone(),
                 peers_path: paths.peers.clone(),
                 transport_mode: transport_mode.clone(),
@@ -451,6 +464,8 @@ pub fn run() {
                 clock: clock.clone(),
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
+                automatic_file_download_limit_bytes,
+                blob_requests,
                 keystore: Arc::new(ProtectionKeyStore::new()),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
@@ -575,6 +590,7 @@ pub fn run() {
             commands::author_delete_chat,
             commands::read_blob,
             commands::blob_exists,
+            commands::download_blob_anyway,
             commands::save_blob,
             commands::image_view,
             commands::save_image,
@@ -599,8 +615,24 @@ pub fn run() {
             commands::pair_reject,
             commands::list_pair_attempts,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app.try_state::<AppState>() {
+                    // Window close (when not kept in the tray), tray Quit, and
+                    // programmatic exits all converge here. The Bare reader
+                    // tasks retain an Arc<PearSidecar>, so relying on
+                    // Child::kill_on_drop alone can orphan bare.exe.
+                    tauri::async_runtime::block_on(async {
+                        apply_sync_enabled(&state, false).await;
+                        // Also cover partial startup: Pear may have reached
+                        // Ready before the sync stack installed its handle.
+                        stop_pear(&state).await;
+                    });
+                }
+            }
+        });
 }
 
 /// Show + unminimize + focus the main window. Used by the tray menu and by the

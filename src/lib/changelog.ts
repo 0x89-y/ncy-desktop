@@ -15,6 +15,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.2",
+    date: "2026-07-24",
+    changes: [
+      "Added a configurable automatic file-download limit with an explicit download action for larger files.",
+      "Increased the temporary absolute file-transfer ceiling to 1 GiB.",
+      "Fixed edited Markdown checklists losing their task markers or collapsing their labels.",
+      "Fixed the bundled Bare runtime remaining active after Ncy had fully exited.",
+      "Simplified already-paired device actions by retaining removal instead of credential rotation.",
+    ],
+  },
+  {
     version: "0.7.1",
     date: "2026-07-22",
     changes: [

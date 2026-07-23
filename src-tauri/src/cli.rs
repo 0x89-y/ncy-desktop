@@ -134,6 +134,10 @@ fn build_state() -> Result<AppState> {
     let blobs = Arc::new(BlobStore::open(&paths.blobs)?);
     let (bus, _) = broadcast::channel::<SyncEvent>(256);
     let (outbound, _) = broadcast::channel::<OutboundEvent>(256);
+    let (blob_requests, _) = broadcast::channel::<crate::sync::ManualBlobRequest>(64);
+    let automatic_file_download_limit_bytes = Arc::new(std::sync::atomic::AtomicU64::new(
+        settings.automatic_file_download_limit_bytes,
+    ));
     let advertised_host = network::best_lan_ip();
     let clock = Arc::new(DesktopClock::new(
         identity.device_id.clone(),
@@ -158,6 +162,8 @@ fn build_state() -> Result<AppState> {
         clock: clock.clone(),
         outbound: outbound.clone(),
         blobs: blobs.clone(),
+        automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+        blob_requests: blob_requests.clone(),
         server_status: server_status.clone(),
         server_addr: server_addr.clone(),
         pairing_registry: pairing_registry.clone(),
@@ -172,6 +178,8 @@ fn build_state() -> Result<AppState> {
         clock: clock.clone(),
         outbound: outbound.clone(),
         blobs: blobs.clone(),
+        automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+        blob_requests: blob_requests.clone(),
         peers: peers.clone(),
         peers_path: paths.peers.clone(),
         transport_mode: transport_mode.clone(),
@@ -189,6 +197,8 @@ fn build_state() -> Result<AppState> {
         clock,
         outbound,
         blobs,
+        automatic_file_download_limit_bytes,
+        blob_requests,
         keystore: Arc::new(ProtectionKeyStore::new()),
         server_status,
         server_addr,
