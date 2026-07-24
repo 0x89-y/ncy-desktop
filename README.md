@@ -1,6 +1,6 @@
 # Ncy Desktop
 
-Desktop client for [Ncy](https://github.com/0x89-y/Ncy), the Android "note-to-self"
+Desktop client for [Ncy](https://github.com/0x89-y/ncy-android), the Android "note-to-self"
 chat app. Implements the full Ncy sync protocol — **bidirectional**, near-real-time,
 peer-to-peer over LAN WebSockets or the optional Pear transport, with the same
 authenticated and encrypted Ncy sync protocol on either route.
@@ -142,7 +142,7 @@ App-data dir (`%APPDATA%\com.ncy.desktop\ncy\` on Windows), under `ncy/`:
 ## Protocol
 
 The wire protocol is documented in the Ncy repo at
-[`docs/sync-protocol.md`](https://github.com/0x89-y/Ncy/blob/main/docs/sync-protocol.md)
+[`docs/sync-protocol.md`](https://github.com/0x89-y/ncy-android/blob/main/docs/sync-protocol.md)
 — handshake, HLC, event/blob/Ack frames, watermark semantics, and the phase-3
 encryption envelope. The Rust implementation lives under `src-tauri/src/sync/`
 and `src-tauri/src/storage/`.
