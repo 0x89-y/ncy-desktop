@@ -36,7 +36,7 @@ pub fn run(config: &Config, name: Option<String>) -> Result<()> {
     print_payload(config, &identity, &pairing, "Registered")
 }
 
-pub fn rotate(config: &Config, id: &str) -> Result<()> {
+pub fn replace_invitation(config: &Config, id: &str) -> Result<()> {
     let _ = pairing_pear_public_key(config)?;
     let paths = data_paths(config.data_dir.clone());
     let identity = DesktopIdentity::load_or_create(&paths.identity, &config.device_name)?;
@@ -46,17 +46,15 @@ pub fn rotate(config: &Config, id: &str) -> Result<()> {
         .iter_mut()
         .find(|pairing| pairing.id == id)
         .ok_or_else(|| anyhow::anyhow!("pairing ID not found: {id}"))?;
-    let affected = pairing
-        .phone_name
-        .clone()
-        .unwrap_or_else(|| pairing.label.clone());
+    anyhow::ensure!(
+        pairing.phone_id.is_none(),
+        "paired devices cannot have their credentials replaced; revoke and pair the device again"
+    );
     pairing.rotate_secret();
     let rotated = pairing.clone();
     save_pairings(&paths.pairings, &file)?;
-    eprintln!(
-        "Rotated credential for '{affected}'. The old device is revoked; the slot and chat data remain, and the device must pair again."
-    );
-    print_payload(config, &identity, &rotated, "Rotated")
+    eprintln!("Replaced unused invitation credential.");
+    print_payload(config, &identity, &rotated, "Replaced")
 }
 
 pub fn revoke(config: &Config, id: &str) -> Result<()> {

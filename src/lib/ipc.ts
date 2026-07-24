@@ -122,7 +122,6 @@ export type MaterializedChat = {
 export type Pairing = {
   id: string;
   label: string;
-  secretB64: string;
   phoneId: string | null;
   phoneName: string | null;
   createdAt: number;
@@ -281,7 +280,7 @@ export const api = {
   createPairing: (label: string) =>
     invoke<PairingDescriptor>("create_pairing", { label }),
   deletePairing: (id: string) => invoke<void>("delete_pairing", { id }),
-  rotatePairing: (id: string) => invoke<PairingDescriptor>("rotate_pairing", { id }),
+  replacePairing: (id: string) => invoke<PairingDescriptor>("replace_pairing", { id }),
   addPeer: (payloadJson: string) =>
     invoke<void>("add_peer", { payloadJson }),
   listPeers: () => invoke<PeerView[]>("list_peers"),

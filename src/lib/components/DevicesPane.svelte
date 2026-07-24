@@ -62,14 +62,7 @@
   function shortDeviceFingerprint(deviceId: string): string {
     return deviceId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) || "unknown";
   }
-  // Per-pairing "Show pairing info" toggle. Claimed pairings hide the QR + JSON
-  // by default (they're only needed for the first pairing handshake); the user
-  // can reveal them here if they need to re-pair a lost phone from scratch.
-  let revealed = $state<Record<string, boolean>>({});
   let diagnostics = $state<Record<string, boolean>>({});
-  function toggleReveal(id: string) {
-    revealed = { ...revealed, [id]: !revealed[id] };
-  }
   function toggleDiagnostics(id: string) {
     diagnostics = { ...diagnostics, [id]: !diagnostics[id] };
   }
@@ -92,14 +85,10 @@
     await refreshPairings();
   }
 
-  async function rotate(pairing: PairingDescriptor["pairing"]) {
-    const affected = pairing.phoneName || pairing.label;
-    const message = pairing.phoneId
-      ? `Rotate the credential for ${affected}? It will disconnect and must pair again. The pairing slot and chats remain.`
-      : "Replace this unused invitation? Any previously copied QR/JSON will stop working.";
-    if (!confirm(message)) return;
-    await api.rotatePairing(pairing.id);
-    revealed = { ...revealed, [pairing.id]: true };
+  async function replaceInvitation(pairing: PairingDescriptor["pairing"]) {
+    if (pairing.phoneId) return;
+    if (!confirm("Replace this unused invitation? Any previously copied QR/JSON will stop working.")) return;
+    await api.replacePairing(pairing.id);
     await refreshPairings();
   }
 
@@ -303,7 +292,6 @@
     <div class="col list">
         {#each $pairings as p (p.pairing.id)}
           {@const claimed = p.pairing.phoneId !== null}
-          {@const showBox = !claimed || revealed[p.pairing.id]}
           <div class="panel pairing">
             <div class="row" style="justify-content:space-between">
               <div class="col">
@@ -324,13 +312,8 @@
                 </span>
               </div>
               <div class="row" style="gap:.3rem">
-                {#if claimed}
-                  <button class="ghost" onclick={() => toggleReveal(p.pairing.id)}>
-                    {showBox ? "Hide" : "Show more"}
-                  </button>
-                {/if}
                 {#if !claimed}
-                  <button class="ghost" onclick={() => rotate(p.pairing)}>
+                  <button class="ghost" onclick={() => replaceInvitation(p.pairing)}>
                     Replace code
                   </button>
                 {/if}
@@ -343,12 +326,8 @@
               </div>
             </div>
 
-            {#if showBox}
-              <p class="tiny muted">
-                {claimed
-                  ? "Rotating disconnects this device and replaces its secret; chats remain, but the device must scan the new code."
-                  : "Replacing this invitation invalidates every previously copied version of this QR/JSON."}
-              </p>
+            {#if !claimed}
+              <p class="tiny muted">Replacing this invitation invalidates every previously copied version of this QR/JSON.</p>
               <div class="row qrbox">
                 <div class="qr" aria-label="Pairing QR">
                   {@html p.qrSvg}

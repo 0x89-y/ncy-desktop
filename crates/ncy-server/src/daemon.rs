@@ -57,8 +57,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     let (bus, _initial_rx) = broadcast::channel::<SyncEvent>(256);
     let (outbound, _initial_outbound_rx) = broadcast::channel::<OutboundEvent>(256);
-    let (blob_requests, _) =
-        broadcast::channel::<ncy_core::sync::ManualBlobRequest>(64);
+    let (blob_requests, _) = broadcast::channel::<ncy_core::sync::ManualBlobRequest>(64);
     let automatic_file_download_limit_bytes = Arc::new(std::sync::atomic::AtomicU64::new(
         config
             .automatic_file_download_limit_mb
@@ -120,8 +119,7 @@ pub async fn run(config: Config) -> Result<()> {
             clock: clock.clone(),
             outbound: outbound.clone(),
             blobs: blobs.clone(),
-            automatic_file_download_limit_bytes:
-                automatic_file_download_limit_bytes.clone(),
+            automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
             blob_requests: blob_requests.clone(),
             server_status: server_status.clone(),
             server_addr: server_addr.clone(),
@@ -164,8 +162,7 @@ pub async fn run(config: Config) -> Result<()> {
             clock: clock.clone(),
             outbound: outbound.clone(),
             blobs: blobs.clone(),
-            automatic_file_download_limit_bytes:
-                automatic_file_download_limit_bytes.clone(),
+            automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
             blob_requests: blob_requests.clone(),
             peers: peers.clone(),
             peers_path: paths.peers.clone(),
@@ -408,7 +405,9 @@ async fn console_loop(
                         .bytes()
                         .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
                 {
-                    Err(anyhow::anyhow!("usage: download <64-character-lowercase-hash>"))
+                    Err(anyhow::anyhow!(
+                        "usage: download <64-character-lowercase-hash>"
+                    ))
                 } else {
                     blob_requests
                         .send(ncy_core::sync::ManualBlobRequest {
@@ -419,10 +418,12 @@ async fn console_loop(
                         .map_err(|_| anyhow::anyhow!("no connected device can provide the file"))
                 }
             }
-            "rotate" if !argument.is_empty() => match pair::rotate(config, argument) {
-                Ok(()) => reload_pairings(pairings_path, &pairings).await,
-                Err(error) => Err(error),
-            },
+            "replace" | "rotate" if !argument.is_empty() => {
+                match pair::replace_invitation(config, argument) {
+                    Ok(()) => reload_pairings(pairings_path, &pairings).await,
+                    Err(error) => Err(error),
+                }
+            }
             "revoke" if !argument.is_empty() => match pair::revoke(config, argument) {
                 Ok(()) => reload_pairings(pairings_path, &pairings).await,
                 Err(error) => Err(error),
@@ -432,7 +433,7 @@ async fn console_loop(
                 Ok(())
             }
             "stop" | "quit" | "exit" => return,
-            "rotate" => Err(anyhow::anyhow!("usage: rotate <pairing-id>")),
+            "replace" | "rotate" => Err(anyhow::anyhow!("usage: replace <pairing-id>")),
             "revoke" => Err(anyhow::anyhow!("usage: revoke <pairing-id>")),
             "download" => Err(anyhow::anyhow!("usage: download <file-hash>")),
             _ => Err(anyhow::anyhow!("unknown command '{command}'; type 'help'")),
@@ -449,7 +450,7 @@ fn print_console_help() {
     println!("  pairings          List pairing slots without secrets");
     println!("  peers             List outbound peer diagnostics");
     println!("  download <hash>   Download a deferred file from a connected device");
-    println!("  rotate <id>       Rotate a pairing credential");
+    println!("  replace <id>      Replace an unused pairing invitation");
     println!("  revoke <id>       Revoke and remove a pairing credential");
     println!("  stop              Shut down the server");
 }

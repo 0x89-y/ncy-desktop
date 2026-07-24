@@ -15,6 +15,16 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.3",
+    date: "2026-07-24",
+    changes: [
+      "Refined Sync settings with contextual connection descriptions and a compact custom file-download limit.",
+      "Moved the editable device name to General and kept its installation ID behind advanced details.",
+      "Pairing invitations now use temporary random labels until the authenticated device name is available.",
+      "Removed QR and JSON credentials from paired-device views and restricted code replacement to unused invitations.",
+    ],
+  },
+  {
     version: "0.7.2",
     date: "2026-07-24",
     changes: [

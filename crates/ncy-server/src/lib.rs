@@ -38,8 +38,9 @@ enum Command {
         #[arg(short, long)]
         name: Option<String>,
     },
-    /// Rotate one pairing secret, preserving its slot/label and requiring re-pairing.
-    Rotate {
+    /// Replace an unused pairing invitation while preserving its slot and label.
+    #[command(alias = "rotate")]
+    Replace {
         /// Pairing slot ID shown by `pairings`.
         #[arg(long)]
         id: String,
@@ -90,7 +91,7 @@ async fn run_async(cli: Cli, bundled_pear: Option<(PathBuf, PathBuf)>) -> Result
     match cli.command.unwrap_or(Command::Run) {
         Command::Run => daemon::run(config).await,
         Command::Pair { name } => pair::run(&config, name),
-        Command::Rotate { id } => pair::rotate(&config, &id),
+        Command::Replace { id } => pair::replace_invitation(&config, &id),
         Command::Revoke { id } => pair::revoke(&config, &id),
         Command::Pairings => pair::list(&config),
         Command::Peers => pair::list_peers(&config),

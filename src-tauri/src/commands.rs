@@ -37,7 +37,10 @@ pub struct DesktopPrefs {
     pub auto_check_updates: bool,
     #[serde(rename = "autoBackupEnabled", default)]
     pub auto_backup_enabled: bool,
-    #[serde(rename = "autoBackupIntervalHours", default = "default_backup_interval")]
+    #[serde(
+        rename = "autoBackupIntervalHours",
+        default = "default_backup_interval"
+    )]
     pub auto_backup_interval_hours: u64,
     #[serde(rename = "autoBackupFolder", default)]
     pub auto_backup_folder: Option<String>,
@@ -66,8 +69,12 @@ pub struct DesktopPrefs {
 fn sync_enabled_for_existing_install() -> bool {
     true
 }
-fn default_backup_interval() -> u64 { 24 }
-fn default_backup_retention() -> Option<u32> { Some(10) }
+fn default_backup_interval() -> u64 {
+    24
+}
+fn default_backup_retention() -> Option<u32> {
+    Some(10)
+}
 
 impl Default for DesktopPrefs {
     fn default() -> Self {
@@ -253,14 +260,40 @@ pub struct PairingPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PairingView {
+    pub id: String,
+    pub label: String,
+    #[serde(rename = "phoneId")]
+    pub phone_id: Option<String>,
+    #[serde(rename = "phoneName")]
+    pub phone_name: Option<String>,
+    #[serde(rename = "createdAt")]
+    pub created_at: i64,
+    #[serde(rename = "lastSeenAt")]
+    pub last_seen_at: Option<i64>,
+}
+
+impl From<&Pairing> for PairingView {
+    fn from(pairing: &Pairing) -> Self {
+        Self {
+            id: pairing.id.clone(),
+            label: pairing.label.clone(),
+            phone_id: pairing.phone_id.clone(),
+            phone_name: pairing.phone_name.clone(),
+            created_at: pairing.created_at,
+            last_seen_at: pairing.last_seen_at,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PairingDescriptor {
-    pub pairing: Pairing,
+    pub pairing: PairingView,
     #[serde(rename = "payloadJson")]
     pub payload_json: String,
     #[serde(rename = "qrSvg")]
     pub qr_svg: String,
 }
-
 #[tauri::command]
 pub async fn list_chats(state: State<'_, AppState>) -> Result<Vec<ChatSummary>, String> {
     list_chats_impl(state.events.clone()).map_err(|e| e.to_string())
@@ -359,34 +392,49 @@ pub async fn lock_chat(state: State<'_, AppState>, chat_id: String) -> Result<()
 
 #[tauri::command]
 pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDescriptor>, String> {
-    let pear_public_key = pairing_pear_public_key(&state).await?;
+    let has_unused_invitation = state
+        .pairings
+        .read()
+        .await
+        .pairings
+        .iter()
+        .any(|pairing| pairing.phone_id.is_none());
+    let pear_public_key = if has_unused_invitation {
+        pairing_pear_public_key(&state).await?
+    } else {
+        None
+    };
     let pairings = state.pairings.read().await;
     let settings = state.settings.read().await.clone();
     let identity_device_id = state.identity_device_id.clone();
     let identity_name = settings.device_name.clone();
     let host = state.advertised_host.read().await.clone();
     let mut out = Vec::new();
-    for p in pairings.pairings.iter() {
-        let payload = PairingPayload {
-            v: 1,
-            device_id: identity_device_id.clone(),
-            name: identity_name.clone(),
-            host: host.clone(),
-            port: settings.port,
-            secret: p.secret_b64.clone(),
-            pear_public_key: pear_public_key.clone(),
+    for pairing in pairings.pairings.iter() {
+        let (payload_json, qr_svg) = if pairing.phone_id.is_none() {
+            let payload = PairingPayload {
+                v: 1,
+                device_id: identity_device_id.clone(),
+                name: identity_name.clone(),
+                host: host.clone(),
+                port: settings.port,
+                secret: pairing.secret_b64.clone(),
+                pear_public_key: pear_public_key.clone(),
+            };
+            let payload_json = serde_json::to_string(&payload).unwrap_or_default();
+            let qr_svg = make_qr_svg(&payload_json);
+            (payload_json, qr_svg)
+        } else {
+            (String::new(), String::new())
         };
-        let payload_json = serde_json::to_string(&payload).unwrap_or_default();
-        let qr_svg = make_qr_svg(&payload_json);
         out.push(PairingDescriptor {
-            pairing: p.clone(),
+            pairing: PairingView::from(pairing),
             payload_json,
             qr_svg,
         });
     }
     Ok(out)
 }
-
 /// A Pear-capable pairing must never silently degrade to a LAN-only payload.
 /// Retry startup here so a transient sidecar failure at application launch can
 /// recover when the user actually opens or creates a pairing invitation.
@@ -439,7 +487,7 @@ pub async fn create_pairing(
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     let qr_svg = make_qr_svg(&payload_json);
     Ok(PairingDescriptor {
-        pairing,
+        pairing: PairingView::from(&pairing),
         payload_json,
         qr_svg,
     })
@@ -453,7 +501,7 @@ pub async fn delete_pairing(state: State<'_, AppState>, id: String) -> Result<()
 }
 
 #[tauri::command]
-pub async fn rotate_pairing(
+pub async fn replace_pairing(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<PairingDescriptor, String> {
@@ -465,6 +513,9 @@ pub async fn rotate_pairing(
             .iter_mut()
             .find(|pairing| pairing.id == id)
             .ok_or_else(|| "pairing not found".to_string())?;
+        if pairing.phone_id.is_some() {
+            return Err("paired devices cannot have their credentials replaced; remove and pair the device again".to_string());
+        }
         pairing.rotate_secret();
         let rotated = pairing.clone();
         save_pairings(&state.paths.pairings, &guard).map_err(|e| e.to_string())?;
@@ -483,7 +534,7 @@ pub async fn rotate_pairing(
     };
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     Ok(PairingDescriptor {
-        pairing,
+        pairing: PairingView::from(&pairing),
         qr_svg: make_qr_svg(&payload_json),
         payload_json,
     })
@@ -1292,9 +1343,9 @@ pub async fn author_edit_text(
     message_id: String,
     blocks: Vec<RichTextBlock>,
 ) -> Result<(), String> {
-    let has_text = blocks.iter().any(|block| {
-        block.spans.iter().any(|span| !span.text.trim().is_empty())
-    });
+    let has_text = blocks
+        .iter()
+        .any(|block| block.spans.iter().any(|span| !span.text.trim().is_empty()));
     if !has_text {
         return Err("edit cannot be empty".to_string());
     }
@@ -2112,19 +2163,29 @@ fn export_backup_to(state: &AppState, dest_path: &str) -> Result<(), String> {
 #[tauri::command]
 pub async fn run_automatic_backup(state: State<'_, AppState>) -> Result<String, String> {
     let prefs = state.desktop_prefs.read().unwrap().clone();
-    let folder = prefs.auto_backup_folder.ok_or("Choose an automatic backup folder")?;
+    let folder = prefs
+        .auto_backup_folder
+        .ok_or("Choose an automatic backup folder")?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("create backup folder: {e}"))?;
     let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
     let path = std::path::Path::new(&folder).join(format!("ncy-auto-backup-{stamp}.zip"));
     export_backup_to(state.inner(), path.to_string_lossy().as_ref())?;
     if let Some(keep) = prefs.auto_backup_retention {
-        let mut files: Vec<_> = std::fs::read_dir(&folder).map_err(|e| e.to_string())?
-            .flatten().map(|e| e.path()).filter(|p| {
-                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("ncy-auto-backup-") && n.ends_with(".zip"))
-            }).collect();
+        let mut files: Vec<_> = std::fs::read_dir(&folder)
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("ncy-auto-backup-") && n.ends_with(".zip"))
+            })
+            .collect();
         files.sort();
         let remove_count = files.len().saturating_sub(keep.max(1) as usize);
-        for old in files.into_iter().take(remove_count) { std::fs::remove_file(old).map_err(|e| e.to_string())?; }
+        for old in files.into_iter().take(remove_count) {
+            std::fs::remove_file(old).map_err(|e| e.to_string())?;
+        }
     }
     Ok(path.to_string_lossy().into_owned())
 }
@@ -2335,17 +2396,18 @@ pub async fn transcription_download_model(
     let paths = whisper_paths(state.inner());
     let app_for_progress = app.clone();
     let model_id = paths.model_id();
-    let result = crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
-        let _ = app_for_progress.emit(
-            "transcription-event",
-            serde_json::json!({
-                "kind": "download-progress",
-                "written": written,
-                "total": total,
-            }),
-        );
-    })
-    .await;
+    let result =
+        crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
+            let _ = app_for_progress.emit(
+                "transcription-event",
+                serde_json::json!({
+                    "kind": "download-progress",
+                    "written": written,
+                    "total": total,
+                }),
+            );
+        })
+        .await;
     match result {
         Ok(()) => {
             let _ = app.emit(
@@ -2369,10 +2431,7 @@ pub async fn transcription_download_model(
 /// runtime first and then the model, skipping either component when it is
 /// already present so interrupted setups are naturally resumable.
 #[tauri::command]
-pub async fn transcription_setup(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn transcription_setup(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let paths = whisper_paths(state.inner());
     let result: anyhow::Result<()> = async {
         if !paths.cli_present() {
@@ -2437,34 +2496,47 @@ pub async fn transcription_select_model(
 ) -> Result<(), String> {
     let paths = whisper_paths(state.inner());
     if paths.model_cached(&model_id) {
-        paths.activate_cached_model(&model_id).map_err(|error| error.to_string())?;
-        let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-complete" }));
+        paths
+            .activate_cached_model(&model_id)
+            .map_err(|error| error.to_string())?;
+        let _ = app.emit(
+            "transcription-event",
+            serde_json::json!({ "kind": "download-complete" }),
+        );
         return Ok(());
     }
     let progress_app = app.clone();
-    let result = crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
-        let _ = progress_app.emit("transcription-event", serde_json::json!({
+    let result =
+        crate::storage::whisper::download_model(&paths, &model_id, move |written, total| {
+            let _ = progress_app.emit("transcription-event", serde_json::json!({
             "kind": "download-progress", "stage": "model", "written": written, "total": total,
         }));
-    }).await;
+        })
+        .await;
     match result {
         Ok(()) => {
-            let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-complete" }));
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-complete" }),
+            );
             Ok(())
         }
         Err(error) => {
             let message = error.to_string();
-            let _ = app.emit("transcription-event", serde_json::json!({ "kind": "download-error", "message": message.clone() }));
+            let _ = app.emit(
+                "transcription-event",
+                serde_json::json!({ "kind": "download-error", "message": message.clone() }),
+            );
             Err(message)
         }
     }
 }
 
 #[tauri::command]
-pub async fn transcription_remove_unused_models(
-    state: State<'_, AppState>,
-) -> Result<u64, String> {
-    whisper_paths(state.inner()).remove_unused_models().map_err(|error| error.to_string())
+pub async fn transcription_remove_unused_models(state: State<'_, AppState>) -> Result<u64, String> {
+    whisper_paths(state.inner())
+        .remove_unused_models()
+        .map_err(|error| error.to_string())
 }
 
 /// Open the whisper install folder in the OS file explorer for diagnostics or
@@ -2635,6 +2707,16 @@ fn make_qr_svg(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pairing_view_never_serializes_the_pairing_secret() {
+        let pairing = Pairing::new_with_label("Temporary invitation");
+        let secret = pairing.secret_b64.clone();
+        let json = serde_json::to_string(&PairingView::from(&pairing)).expect("serialize view");
+
+        assert!(!json.contains("secret"));
+        assert!(!json.contains(&secret));
+    }
 
     /// A 1x1 opaque red PNG. Real bytes, so it decodes as well as sniffs.
     const RED_PNG: &[u8] = &[

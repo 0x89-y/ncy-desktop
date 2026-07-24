@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.3 — 2026-07-24
+
+### Changed
+
+- Refined Sync settings with contextual connection descriptions, a compact custom
+  file-download limit, and device identity under General.
+- Pairing invitations now use temporary random labels until authentication supplies the
+  device name.
+- Removed QR and JSON credentials from paired-device views and restricted invitation-code
+  replacement to unused invitations.
+
 ## 0.7.2 — 2026-07-24
 
 ### Added

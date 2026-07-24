@@ -351,11 +351,10 @@ pub fn run() {
             let blobs = Arc::new(BlobStore::open(&paths.blobs)?);
             let (bus, _initial_rx) = broadcast::channel::<SyncEvent>(256);
             let (outbound, _initial_outbound_rx) = broadcast::channel::<OutboundEvent>(256);
-            let (blob_requests, _) =
-                broadcast::channel::<crate::sync::ManualBlobRequest>(64);
-            let automatic_file_download_limit_bytes = Arc::new(
-                std::sync::atomic::AtomicU64::new(settings.automatic_file_download_limit_bytes),
-            );
+            let (blob_requests, _) = broadcast::channel::<crate::sync::ManualBlobRequest>(64);
+            let automatic_file_download_limit_bytes = Arc::new(std::sync::atomic::AtomicU64::new(
+                settings.automatic_file_download_limit_bytes,
+            ));
             let advertised_host = network::best_lan_ip();
 
             // Seed the desktop's HLC from whatever's already on disk so we never
@@ -422,8 +421,7 @@ pub fn run() {
                 clock: clock.clone(),
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
-                automatic_file_download_limit_bytes:
-                    automatic_file_download_limit_bytes.clone(),
+                automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
                 blob_requests: blob_requests.clone(),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
@@ -443,8 +441,7 @@ pub fn run() {
                 clock: clock.clone(),
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
-                automatic_file_download_limit_bytes:
-                    automatic_file_download_limit_bytes.clone(),
+                automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
                 blob_requests: blob_requests.clone(),
                 peers: peers.clone(),
                 peers_path: paths.peers.clone(),
@@ -554,7 +551,7 @@ pub fn run() {
             commands::list_pairings,
             commands::create_pairing,
             commands::delete_pairing,
-            commands::rotate_pairing,
+            commands::replace_pairing,
             commands::add_peer,
             commands::list_peers,
             commands::set_peer_enabled,

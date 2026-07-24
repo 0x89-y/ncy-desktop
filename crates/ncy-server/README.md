@@ -84,15 +84,14 @@ connections without a restart:
 
 ```sh
 ncy-server --config /etc/ncy-server/config.toml pairings
-ncy-server --config /etc/ncy-server/config.toml rotate --id <pairing-id>
+ncy-server --config /etc/ncy-server/config.toml replace --id <pairing-id>
 ncy-server --config /etc/ncy-server/config.toml revoke --id <pairing-id>
 ncy-server --config /etc/ncy-server/config.toml peers
 ncy-server --config /etc/ncy-server/config.toml purge-tombstones --yes-i-understand
 ```
 
-`rotate` preserves the pairing slot/label and all chats but replaces its secret,
-clears the claimed device/watermark, and prints a new QR/JSON; the affected device
-must pair again. `revoke` removes the slot but never deletes chats. A connection
+`replace` refreshes only an unused invitation and invalidates its previous QR/JSON.
+Claimed devices must be revoked and paired again instead. `revoke` removes the slot but never deletes chats. A connection
 that was already authenticated is allowed to finish; rotation or revocation governs
 new and reconnecting sessions. Clients distinguish the resulting permanent
 credential rejection from ordinary offline/network errors and stop retrying.
@@ -153,7 +152,7 @@ ncy-server --config /etc/ncy-server/config.toml run   # `run` is the default
 
 When attached to a terminal, the running server accepts administration commands
 on stdin. Type `help` to list them. Common commands are `pair My Phone`,
-`pairings`, `peers`, `rotate <id>`, `revoke <id>`, and `stop`. `pair` prints its
+`pairings`, `peers`, `replace <id>`, `revoke <id>`, and `stop`. `pair` prints its
 JSON and QR directly in the same terminal as the server logs. Services with no
 interactive stdin continue running normally and can be administered from another
 process through the commands above.
