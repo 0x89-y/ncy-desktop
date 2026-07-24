@@ -61,6 +61,7 @@
   let transcriptionEnabled = $state(false);
   let syncTransportMode = $state<AppSettings["syncTransportMode"]>("localOnly");
   let automaticFileDownloadLimitBytes = $state(100 * 1024 * 1024);
+  let automaticFileDownloadMode = $state("104857600");
   let desktopPrefs = $state<DesktopPrefs>({
     startMinimized: false,
     closeToTray: false,
@@ -78,6 +79,7 @@
   });
   let desktopPrefsError = $state<string | null>(null);
   let saving = $state(false);
+  let showGeneralAdvanced = $state(false);
   let showSyncAdvanced = $state(false);
   let showTranscriptionAdvanced = $state(false);
 
@@ -115,6 +117,11 @@
       syncTransportMode = $settings.syncTransportMode ?? "localOnly";
       automaticFileDownloadLimitBytes =
         $settings.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024;
+      automaticFileDownloadMode = [0, 25, 100, 250, 500, 1024]
+        .map((mib) => String(mib * 1024 * 1024))
+        .includes(String(automaticFileDownloadLimitBytes))
+          ? String(automaticFileDownloadLimitBytes)
+          : "custom";
       dirty = false;
     }
   });
@@ -512,6 +519,21 @@
   <section class="group">
     <h2>General</h2>
     <div class="opt-list">
+      <label class="field">
+        <span class="field-label">Device name</span>
+        <div class="row device-name-row">
+          <input type="text" bind:value={deviceName} oninput={markDirty} />
+          <button type="button" class="ghost" onclick={() => showGeneralAdvanced = !showGeneralAdvanced}>
+            {showGeneralAdvanced ? "Hide advanced" : "Advanced"}
+          </button>
+        </div>
+      </label>
+      {#if showGeneralAdvanced && $identity}
+        <div class="opt-row">
+          <span class="opt-label">Device ID</span>
+          <code class="id">{$identity.deviceId}</code>
+        </div>
+      {/if}
       <label class="opt-row">
         <span class="opt-label">Start minimized</span>
         <span class="switch">
@@ -603,8 +625,20 @@
     </div>
   </section>
 
+  <!-- Discovery and the paired-device list are inert without a running server,
+       so they collapse rather than sit there disabled. -->
+  {#if desktopPrefs.syncServerEnabled}
+    <DevicesPane
+      discoverable={discoverable}
+      connectionMode={syncTransportMode}
+      onDiscoverableChange={(value) => {
+        discoverable = value;
+        markDirty();
+      }}
+    />
+  {/if}
   <section class="group">
-    <h2>This device</h2>
+    <h2>Sync settings</h2>
     <div class="opt-list">
       <label class="field">
         <span class="field-label">Connection mode</span>
@@ -615,66 +649,55 @@
           <option value="pearPreferred">Pear preferred</option>
         </select>
         <span class="tiny muted">
-          Local stays on your current network. Pear can connect already-paired devices across networks; it never discovers or pairs unknown devices.
+          {syncTransportMode === "localOnly"
+            ? "Uses your current network only."
+            : syncTransportMode === "pearOnly"
+              ? "Pairs and syncs across networks using Pear."
+              : syncTransportMode === "localPreferred"
+                ? "Uses your current network when available, with Pear across networks."
+                : "Uses Pear when available, with local-network fallback."}
         </span>
-      </label>
-      <label class="field">
-        <span class="field-label">Device name</span>
-        <div class="row device-name-row">
-          <input
-            type="text"
-            bind:value={deviceName}
-            oninput={markDirty}
-          />
-          <button type="button" class="ghost" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
-            {showSyncAdvanced ? "Hide advanced" : "Advanced"}
-          </button>
-        </div>
       </label>
       <label class="field">
         <span class="field-label">Automatic file downloads</span>
         <select
-          value={automaticFileDownloadLimitBytes}
+          value={automaticFileDownloadMode}
           onchange={(event) => {
-            automaticFileDownloadLimitBytes = Number(
-              (event.currentTarget as HTMLSelectElement).value,
-            );
+            const value = (event.currentTarget as HTMLSelectElement).value;
+            automaticFileDownloadMode = value;
+            if (value !== "custom") automaticFileDownloadLimitBytes = Number(value);
             markDirty();
           }}
         >
-          <option value={0}>Always ask</option>
-          <option value={25 * 1024 * 1024}>25 MB</option>
-          <option value={100 * 1024 * 1024}>100 MB</option>
-          <option value={250 * 1024 * 1024}>250 MB</option>
-          <option value={500 * 1024 * 1024}>500 MB</option>
-          <option value={1024 * 1024 * 1024}>1 GB</option>
+          <option value="0">Always ask</option>
+          <option value={String(25 * 1024 * 1024)}>25 MB</option>
+          <option value={String(100 * 1024 * 1024)}>100 MB</option>
+          <option value={String(250 * 1024 * 1024)}>250 MB</option>
+          <option value={String(500 * 1024 * 1024)}>500 MB</option>
+          <option value={String(1024 * 1024 * 1024)}>1 GB</option>
+          <option value="custom">Custom…</option>
         </select>
-        <input
-          type="number"
-          min="0"
-          max="1024"
-          step="1"
-          value={Math.round(automaticFileDownloadLimitBytes / (1024 * 1024))}
-          aria-label="Custom automatic file download limit in megabytes"
-          oninput={(event) => {
-            const mib = Math.max(
-              0,
-              Math.min(1024, Number((event.currentTarget as HTMLInputElement).value) || 0),
-            );
-            automaticFileDownloadLimitBytes = mib * 1024 * 1024;
-            markDirty();
-          }}
-        />
-        <span class="tiny muted">Custom limit in MB (0 means Always ask).</span>
+        {#if automaticFileDownloadMode === "custom"}
+          <input
+            type="number"
+            min="1"
+            max="1024"
+            step="1"
+            value={Math.max(1, Math.round(automaticFileDownloadLimitBytes / (1024 * 1024)))}
+            aria-label="Custom automatic file download limit in megabytes"
+            oninput={(event) => {
+              const mib = Math.max(1, Math.min(1024, Number((event.currentTarget as HTMLInputElement).value) || 1));
+              automaticFileDownloadLimitBytes = mib * 1024 * 1024;
+              markDirty();
+            }}
+          />
+        {/if}
         <span class="tiny muted">Larger files remain available to download manually.</span>
       </label>
+      <button type="button" class="ghost advanced-settings-button" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
+        {showSyncAdvanced ? "Hide advanced sync settings" : "Advanced sync settings"}
+      </button>
       {#if showSyncAdvanced}
-      {#if $identity}
-        <div class="opt-row">
-          <span class="opt-label">Device ID</span>
-          <code class="id">{$identity.deviceId}</code>
-        </div>
-      {/if}
         <label class="field">
           <span class="field-label">Sync port · restart to apply</span>
           <input
@@ -693,18 +716,6 @@
     </div>
   </section>
 
-  <!-- Discovery and the paired-device list are inert without a running server,
-       so they collapse rather than sit there disabled. -->
-  {#if desktopPrefs.syncServerEnabled}
-    <DevicesPane
-      discoverable={discoverable}
-      connectionMode={syncTransportMode}
-      onDiscoverableChange={(value) => {
-        discoverable = value;
-        markDirty();
-      }}
-    />
-  {/if}
   {:else if $settingsTab === "interface"}
   <section class="group">
     <h2>Interface</h2>

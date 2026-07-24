@@ -33,7 +33,6 @@
     return "Connected";
   }
 
-  let label = $state("");
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
   let showConnectionDetails = $state(false);
@@ -79,9 +78,8 @@
     if (busy) return;
     busy = true;
     try {
-      const name = label.trim() || "Phone";
-      await api.createPairing(name);
-      label = "";
+      const placeholder = `New device ${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
+      await api.createPairing(placeholder);
       await refreshPairings();
     } finally {
       busy = false;
@@ -211,18 +209,12 @@
 
 <div class="devices">
   <section class="group">
-    <h2>Pairing</h2>
+    <h2>Add or share device</h2>
     <div class="opt-list">
       <div class="field">
-        <span class="field-label">Pairing label</span>
+        <span class="field-label">Share this desktop</span>
         <div class="row form">
-          <input
-            type="text"
-            placeholder="Phone"
-            bind:value={label}
-            onkeydown={(e) => e.key === "Enter" && create()}
-          />
-          <button onclick={create} disabled={busy}>{busy ? "Creating..." : "Create code"}</button>
+          <button onclick={create} disabled={busy}>{busy ? "Creating..." : "Create pairing code"}</button>
           <button type="button" class="ghost" onclick={() => (showManualPairing = !showManualPairing)}>
             {showManualPairing ? "Hide manual" : "Manual"}
           </button>
@@ -321,15 +313,11 @@
                     class:paired={claimed}
                     title={claimed ? "Paired" : "Awaiting device"}
                   ></span>
-                  <strong>{p.pairing.label}</strong>
+                  <strong>{claimed ? (p.pairing.phoneName || "Unnamed device") : p.pairing.label}</strong>
                 </div>
                 <span class="muted tiny">
-                  {#if claimed}
-                    Device {p.pairing.phoneName || "Unnamed device"}
-                    {#if duplicateDeviceName(p.pairing.phoneName)}
-                      · ID {shortDeviceFingerprint(p.pairing.phoneId!)}
-                    {/if}
-                    ·
+                  {#if claimed && duplicateDeviceName(p.pairing.phoneName)}
+                    ID {shortDeviceFingerprint(p.pairing.phoneId!)} ·
                   {/if}
                   Created {formatFullTime(p.pairing.createdAt)}
                   {#if p.pairing.lastSeenAt} · last synchronized {formatFullTime(p.pairing.lastSeenAt)}{/if}
@@ -510,7 +498,6 @@
     padding-top: 1.25rem;
   }
   .form { gap: .5rem; }
-  .form input { flex: 1; }
   .form .ghost {
     flex-shrink: 0;
   }
