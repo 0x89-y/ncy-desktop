@@ -34,11 +34,8 @@ The CLI uses the same profile, identity, settings, and peers as Ncy Desktop.
 Do not run the GUI and a headless client against that profile simultaneously."#;
 
 pub fn run(args: &[String]) -> Result<()> {
-    let args = if args.first().map(String::as_str) == Some("--no-gui") {
-        &args[1..]
-    } else {
-        &args[1..]
-    };
+    // main passes the full argv vector; skip the executable name.
+    let args = &args[1..];
     let command = args.first().map(String::as_str).unwrap_or("run");
     if matches!(command, "help" | "--help" | "-h") {
         println!("{HELP}");
@@ -74,6 +71,7 @@ async fn run_async(command: &str, args: &[String]) -> Result<()> {
     }
 }
 
+#[allow(clippy::needless_return)] // early returns keep the cfg-specific branches readable
 fn data_root() -> Result<PathBuf> {
     if let Some(root) = std::env::var_os("NCY_DATA_DIR") {
         return Ok(PathBuf::from(root));
@@ -199,6 +197,7 @@ fn build_state() -> Result<AppState> {
         blobs,
         automatic_file_download_limit_bytes,
         blob_requests,
+        blob_gc_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         keystore: Arc::new(ProtectionKeyStore::new()),
         server_status,
         server_addr,

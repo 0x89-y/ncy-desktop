@@ -104,6 +104,8 @@ export type ChatMetadata = {
   isProtected: boolean;
   hideName: boolean;
   remoteMessagesOnLeft: boolean;
+  /** Delete messages older than this many days, on every device. Null = keep forever. */
+  retentionDays: number | null;
 };
 
 export type MaterializedChat = {
@@ -232,12 +234,29 @@ export type DeviceIdentityView = {
   name: string;
 };
 
+/** Result of a media-store scan or sweep — see `collect_unused_blobs`. */
+export interface BlobGcReport {
+  scanned: number;
+  referenced: number;
+  /** On a dry run this is what *would* be removed. */
+  deleted: number;
+  reclaimedBytes: number;
+  totalBytes: number;
+  /** Protected chats still locked; non-empty means nothing was deleted. */
+  lockedChats: string[];
+}
+
 export type SyncEventPayload =
   | { kind: "peer-connected"; peer: string; pairingId: string | null; phoneId: string | null }
   | { kind: "peer-auth-failed"; peer: string }
   | { kind: "event-received"; chatId: string; eventId: string }
   | { kind: "event-authored"; chatId: string; eventId: string }
   | { kind: "blob-arrived"; hash: string }
+  /** Bytes received so far for an in-flight blob, throttled by the core. Lets the
+   *  UI show real movement instead of an indefinite "downloading…". */
+  | { kind: "blob-progress"; hash: string; received: number; total: number }
+  /** A transfer was abandoned. The UI must stop showing it as in-flight. */
+  | { kind: "blob-failed"; hash: string; reason: string }
   | { kind: "peer-disconnected"; peer: string }
   | { kind: "peer-error"; peer: string; message: string }
   | { kind: "server-started"; addr: string }
@@ -348,7 +367,15 @@ export const api = {
     invoke<void>("author_toggle_text_checklist_block", { chatId, messageId, blockIndex }),
   authorUpdateChatMeta: (
     chatId: string,
-    patch: { name?: string; isPinned?: boolean; isArchived?: boolean; tags?: string[]; remoteMessagesOnLeft?: boolean },
+    patch: {
+      name?: string;
+      isPinned?: boolean;
+      isArchived?: boolean;
+      tags?: string[];
+      remoteMessagesOnLeft?: boolean;
+      /** Days to keep; 0 clears the rule. Omit to leave it unchanged. */
+      retentionDays?: number;
+    },
   ) =>
     invoke<void>("author_update_chat_meta", {
       chatId,
@@ -357,9 +384,10 @@ export const api = {
       isArchived: patch.isArchived ?? null,
       tags: patch.tags ?? null,
       remoteMessagesOnLeft: patch.remoteMessagesOnLeft ?? null,
+      retentionDays: patch.retentionDays ?? null,
     }),
-  authorCreateChat: (name: string) =>
-    invoke<string>("author_create_chat", { name }),
+  authorCreateChat: (name: string, profileId: string, profileName: string) =>
+    invoke<string>("author_create_chat", { name, profileId, profileName }),
   authorDeleteChat: (chatId: string) =>
     invoke<void>("author_delete_chat", { chatId }),
   authorSendMessage: (
@@ -373,8 +401,26 @@ export const api = {
     invoke<string | null>("read_blob", { hash, mediaType }),
   blobExists: (hash: string, mediaType: MediaType) =>
     invoke<boolean>("blob_exists", { hash, mediaType }),
-  downloadBlobAnyway: (hash: string) =>
-    invoke<void>("download_blob_anyway", { hash, mediaType: "file" }),
+  downloadBlobAnyway: (hash: string, mediaType: MediaType = "file") =>
+    invoke<void>("download_blob_anyway", { hash, mediaType }),
+  /** Abandon an in-flight download; the partial file is discarded. */
+  cancelBlobDownload: (hash: string, mediaType: MediaType = "file") =>
+    invoke<void>("cancel_blob_download", { hash, mediaType }),
+  /** Delete messages past their chat's retention window. Returns how many went. */
+  applyChatRetention: () => invoke<number>("apply_chat_retention"),
+  /** Clear outbound sync watermarks so every paired device gets a full replay. */
+  forceFullResync: () => invoke<number>("force_full_resync"),
+  /** Strip deleted messages' content from the event logs. */
+  scrubDeletedMessageContent: () => invoke<number>("scrub_deleted_message_content"),
+  /** True when this device dropped the blob on purpose (vs. still arriving). */
+  blobEvicted: (hash: string, mediaType: MediaType) =>
+    invoke<boolean>("blob_evicted", { hash, mediaType }),
+  /** Drop this device's copy of a blob, keeping the message. Returns bytes freed. */
+  evictBlob: (hash: string, mediaType: MediaType) =>
+    invoke<number>("evict_blob", { hash, mediaType }),
+  /** Measure the media store (`dryRun`) or delete blobs nothing refers to. */
+  collectUnusedBlobs: (dryRun: boolean) =>
+    invoke<BlobGcReport>("collect_unused_blobs", { dryRun }),
   saveBlob: (hash: string, mediaType: MediaType, dest: string) =>
     invoke<void>("save_blob", { hash, mediaType, dest }),
 

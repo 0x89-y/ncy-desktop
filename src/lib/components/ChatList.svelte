@@ -1,59 +1,77 @@
 <script lang="ts">
-  import { activeChatId, visibleChats, selectChat, allTags, activeTag, profileBuckets, activeProfileId, showArchived, refreshChats, refreshActiveChat } from "../stores/app";
+  import { requestConfirmation } from "../stores/confirm";
+  import { activeChatId, visibleChats, selectChat, profileBuckets, activeProfileId, newChatRequest, refreshChats, refreshActiveChat } from "../stores/app";
   import { api, type ChatSummary } from "../ipc";
   import ChatListItem from "./ChatListItem.svelte";
   import SearchPane from "./chatpane/SearchPane.svelte";
-  import { Check, Filter, Plus, Search } from "@lucide/svelte";
+  import { Plus } from "@lucide/svelte";
 
-  let filtersOpen = $state(false);
-  let query = $state("");
+  let { query = "" }: { query?: string } = $props();
   const activeVisibleChats = $derived($visibleChats.filter((chat) => !chat.isArchived));
   const archivedVisibleChats = $derived($visibleChats.filter((chat) => chat.isArchived));
 
-  function setTag(t: string | null) {
-    activeTag.set(t);
-  }
 
-  function setProfile(id: string | null) {
-    activeProfileId.set(id);
-  }
 
   // Create a chat locally — the desktop works with no phone at all.
   let creating = $state(false);
   let newName = $state("");
+  let createProfileChoice = $state("");
+  let createInput: HTMLInputElement | undefined = $state();
+
   let createBusy = $state(false);
   let createError = $state<string | null>(null);
-
   function startCreate() {
     creating = true;
     newName = "";
+
+    const activeBucket = $profileBuckets.find((profile) => profile.id === $activeProfileId);
+    createProfileChoice = activeBucket?.profileId ?? "";
     createError = null;
+    // Focus the field so the row is usable straight from Ctrl+N without a click —
+    // and so its Escape handler is reachable. The input mounts on the next tick.
+    queueMicrotask(() => createInput?.focus());
   }
+
+  // Ctrl+N from the Starred/Reminders tabs flips the pane and sets the request in
+  // the same tick this component mounts, so the flag has to still be pending when
+  // the effect first runs. Clearing it here keeps a later manual remount quiet.
+  $effect(() => {
+    if (!$newChatRequest) return;
+    newChatRequest.set(false);
+    startCreate();
+  });
 
   function cancelCreate() {
     creating = false;
     newName = "";
+
+    createProfileChoice = "";
     createError = null;
   }
 
   async function submitCreate() {
     const name = newName.trim();
+    const profileName = $profileBuckets.find((profile) => profile.profileId === createProfileChoice)?.name ?? "";
+    const profileId = createProfileChoice;
     if (!name || createBusy) return;
     createBusy = true;
     createError = null;
     try {
-      const id = await api.authorCreateChat(name);
+      const id = await api.authorCreateChat(name, profileId, profileName);
       await refreshChats();
+      const createdBucket = $profileBuckets.find((profile) => profile.profileId === profileId);
+      activeProfileId.set(createdBucket?.id ?? (profileId ? null : ""));
       await selectChat(id);
       creating = false;
       newName = "";
+
+      createProfileChoice = "";
     } catch (e: any) {
       createError = typeof e === "string" ? e : (e?.message ?? "create failed");
     } finally {
       createBusy = false;
     }
   }
-
   // Right-click a chat row → the same actions as the chat header's ⋯ menu.
   let ctx = $state<{ chat: ChatSummary; x: number; y: number } | null>(null);
   let metaBusy = $state(false);
@@ -117,7 +135,7 @@
     closeCtx();
     const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
     if (prefs.askBeforeDeleting &&
-      !confirm(
+      !await requestConfirmation(
         `Delete "${c.name}"? This removes it on every paired device and can't be undone.`,
       )
     )
@@ -196,10 +214,17 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      if (ctx) closeCtx();
-      else if (pinEditor) cancelPin();
-      else if (editor) cancelEditor();
+    if (e.key !== "Escape") return;
+    // Only claim Escape when a layer is actually open — see ChatListPane.
+    if (ctx) {
+      e.stopImmediatePropagation();
+      closeCtx();
+    } else if (pinEditor) {
+      e.stopImmediatePropagation();
+      cancelPin();
+    } else if (editor) {
+      e.stopImmediatePropagation();
+      cancelEditor();
     }
   }
 </script>
@@ -207,41 +232,12 @@
 <svelte:window onkeydown={onWindowKey} />
 
 <div class="wrap col">
-  <div class="filter-row">
-      <div class="search-box">
-        <Search size={15} strokeWidth={2.25} aria-hidden="true" />
-        <input type="search" placeholder="Search chats & messages…" bind:value={query} aria-label="Search chats and messages" />
-      </div>
-      <button class="filter-btn" class:active={$activeProfileId !== null || $activeTag !== null || $showArchived} onclick={() => filtersOpen = !filtersOpen} aria-expanded={filtersOpen} title="Filter chats" aria-label="Filter chats">
-        <Filter size={14} strokeWidth={2.25} />
-      </button>
-      {#if filtersOpen}
-        <button class="filter-backdrop" aria-label="Close filters" onclick={() => filtersOpen = false}></button>
-        <div class="filter-menu">
-          <strong class="tiny muted">Profile</strong>
-          <button onclick={() => setProfile(null)}><span>All chats</span>{#if $activeProfileId === null}<Check size={14} />{/if}</button>
-          {#each $profileBuckets as p (p.id)}
-            <button onclick={() => setProfile(p.id)}><span>{p.name}</span>{#if $activeProfileId === p.id}<Check size={14} />{/if}</button>
-          {/each}
-          {#if $allTags.length}
-            <strong class="tiny muted">Tag</strong>
-            <button onclick={() => setTag(null)}><span>Any tag</span>{#if $activeTag === null}<Check size={14} />{/if}</button>
-            {#each $allTags as t (t)}
-              <button onclick={() => setTag(t)}><span>#{t}</span>{#if $activeTag === t}<Check size={14} />{/if}</button>
-            {/each}
-          {/if}
-          <div class="filter-separator"></div>
-          <strong class="tiny muted">Visibility</strong>
-          <button onclick={() => showArchived.update((v) => !v)}><span>Show archived chats</span>{#if $showArchived}<Check size={14} />{/if}</button>
-        </div>
-      {/if}
-  </div>
-
   {#if creating}
     <div class="row create">
       <input
         type="text"
         placeholder="Chat name"
+        bind:this={createInput}
         bind:value={newName}
         disabled={createBusy}
         onkeydown={(e) => {
@@ -249,6 +245,12 @@
           if (e.key === "Escape") { e.preventDefault(); cancelCreate(); }
         }}
       />
+      <select bind:value={createProfileChoice} disabled={createBusy} aria-label="Profile">
+        <option value="">Default profile</option>
+        {#each $profileBuckets.filter((profile) => profile.profileId) as profile (profile.id)}
+          <option value={profile.profileId}>{profile.name}</option>
+        {/each}
+      </select>
       <button class="primary" onclick={submitCreate} disabled={createBusy || !newName.trim()}>
         {createBusy ? "…" : "Create"}
       </button>
@@ -400,12 +402,13 @@
     flex-wrap: wrap;
     padding: 0 .25rem;
   }
-  .create input {
+  .create input,
+  .create select {
     flex: 1 1 100%;
     min-width: 0;
     padding: .4rem .55rem;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
     background: var(--surface-2, var(--surface));
     color: inherit;
     font: inherit;
@@ -414,8 +417,8 @@
     padding: .4rem .8rem;
     border-radius: var(--radius);
     border: none;
-    background: var(--primary);
-    color: var(--on-primary);
+    background: var(--accent);
+    color: var(--accent-contrast);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
@@ -424,26 +427,26 @@
   .create .text-btn {
     background: transparent;
     border: none;
-    color: var(--primary, currentColor);
+    color: var(--accent, currentColor);
     font: inherit;
     cursor: pointer;
   }
   .create-error {
-    color: var(--error, #b00);
+    color: var(--danger);
     padding: 0 .25rem;
   }
   .create-pin {
     gap: .4rem;
     padding: .55rem .6rem;
     margin: 0 .25rem;
-    border: 1px solid var(--outline-variant);
-    border-radius: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     background: var(--surface-2, var(--surface));
   }
   .create-pin input {
     padding: .4rem .55rem;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
     background: var(--surface);
     color: inherit;
     font: inherit;
@@ -452,8 +455,8 @@
     padding: .4rem .8rem;
     border-radius: var(--radius);
     border: none;
-    background: var(--primary);
-    color: var(--on-primary);
+    background: var(--accent);
+    color: var(--accent-contrast);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
@@ -462,23 +465,10 @@
   .create-pin .text-btn {
     background: transparent;
     border: none;
-    color: var(--primary, currentColor);
+    color: var(--accent, currentColor);
     font: inherit;
     cursor: pointer;
   }
-  .filter-row { position: relative; display:flex; gap:.35rem; padding:.45rem; border-bottom: 1px solid var(--border); }
-  .search-box { flex:1; min-width:0; display:flex; align-items:center; gap:.4rem; padding:0 .55rem; border:1px solid var(--border); background:var(--surface); color:var(--text-muted); border-radius:var(--radius-sm); }
-  .search-box:focus-within { border-color:var(--accent); color:var(--accent); }
-  .search-box input { width:100%; min-width:0; padding:.38rem 0; border:0; outline:0; background:transparent; color:var(--text); font:inherit; }
-  .filter-btn { display:flex; align-items:center; justify-content:center; flex:0 0 2rem; width:2rem; padding:0; border:0; background:transparent; color:var(--text-muted); border-radius:var(--radius-sm); }
-  .filter-btn:hover { background:var(--surface-hover); color:var(--text); filter:none; }
-  .filter-btn.active { color:var(--accent); background:color-mix(in oklab, var(--accent) 14%, transparent); }
-  .filter-backdrop, .filter-backdrop:hover { position:fixed; inset:0; z-index:20; border:0; background:transparent; }
-  .filter-menu { position:absolute; z-index:21; top:calc(100% - .25rem); left:.45rem; right:.45rem; display:flex; flex-direction:column; padding:.3rem; max-height:20rem; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); box-shadow:var(--shadow); }
-  .filter-menu strong { padding:.45rem .55rem .2rem; }
-  .filter-separator { height:1px; margin:.35rem .25rem .1rem; background:var(--outline-variant); }
-  .filter-menu button { display:flex; justify-content:space-between; align-items:center; border:0; background:transparent; color:inherit; padding:.45rem .55rem; border-radius:5px; text-align:left; }
-  .filter-menu button:hover { background:var(--surface-hover); }
   /* The outer ChatListPane supplies the frame; keep only the row dividers here. */
   .list {
     flex: 1;
@@ -521,9 +511,9 @@
     display: flex;
     flex-direction: column;
     background: var(--surface);
-    border: 1px solid var(--outline-variant);
-    border-radius: 12px;
-    box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: none;
     overflow: hidden;
     padding: .25rem;
   }
@@ -534,7 +524,7 @@
     font: inherit;
     text-align: left;
     padding: .5rem .7rem;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .ctx-menu button:hover { background: var(--surface-2, var(--surface)); }

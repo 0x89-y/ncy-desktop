@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { requestConfirmation } from "../stores/confirm";
   import {
     activeChat,
     refreshActiveChat,
@@ -18,7 +19,7 @@
   import {
     Bold, Code2, Heading1, Heading2, Heading3, Italic, List, ListChecks,
     Plus, Pin, Lock, Strikethrough, Unlock, X,
-    MessageSquare, Mic, Settings, Square,
+    ArrowDown, Check, MessageSquare, Mic, Settings, Square,
   } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
@@ -26,9 +27,14 @@
   let scroller: HTMLDivElement | undefined = $state();
   let composeTextarea: HTMLTextAreaElement | undefined = $state();
   let lastCount = $state(0);
+  let lastChatId = $state<string | null>(null);
+  let atBottom = $state(true);
+  let newMessageCount = $state(0);
+  const drafts = new Map<string, string>();
   let composeText = $state("");
   let sending = $state(false);
   let sendError = $state<string | null>(null);
+  let editRequestedId = $state<string | null>(null);
 
   let composeActionsOpen = $state(false);
   let formattingOpen = $state(false);
@@ -108,16 +114,56 @@
     }, 1400);
   }
 
+  let scrollFrame: number | null = null;
+  function updateScrollState() {
+    if (scrollFrame !== null) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
+      if (!scroller) return;
+      atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 36;
+      if (atBottom) newMessageCount = 0;
+    });
+  }
+
+  function jumpToLatest() {
+    if (!scroller) return;
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    atBottom = true;
+    newMessageCount = 0;
+  }
+
   $effect(() => {
     const c = $activeChat;
     if (!c || !scroller) return;
+    const chatId = c.metadata.id;
     const count = c.messages.length;
-    if (count !== lastCount) {
+    const changedChat = chatId !== lastChatId;
+    const added = changedChat ? 0 : Math.max(0, count - lastCount);
+    if (changedChat) {
+      if (lastChatId) drafts.set(lastChatId, composeText);
+      composeText = drafts.get(chatId) ?? "";
+      lastChatId = chatId;
+      newMessageCount = 0;
+      atBottom = true;
       queueMicrotask(() => {
         if (scroller) scroller.scrollTop = scroller.scrollHeight;
       });
-      lastCount = count;
+    } else if (added > 0) {
+      if (atBottom) {
+        queueMicrotask(() => {
+          if (scroller) scroller.scrollTop = scroller.scrollHeight;
+        });
+      } else {
+        newMessageCount += added;
+      }
     }
+    lastCount = count;
+  });
+
+  $effect(() => {
+    const id = $activeChat?.metadata.id;
+    const draft = composeText;
+    if (id) drafts.set(id, draft);
   });
 
   async function send() {
@@ -128,14 +174,17 @@
     if (blocks.length === 0) return;
     sending = true;
     sendError = null;
+    let sent = false;
     try {
       await api.authorSendMessage(c.metadata.id, blocks, consumeReplyId());
       composeText = "";
+      sent = true;
     } catch (e: any) {
       sendError = typeof e === "string" ? e : (e?.message ?? "send failed");
     } finally {
       sending = false;
     }
+    if (sent) queueMicrotask(() => composeTextarea?.focus());
   }
 
   function applyWrap(prefix: string, suffix: string = prefix) {
@@ -281,6 +330,11 @@
       closeComposeMenu();
       return;
     }
+    if (e.key === "Escape" && chatSettingsOpen) {
+      e.preventDefault();
+      chatSettingsOpen = false;
+      return;
+    }
     // Ctrl/Cmd+Shift+R — reply to the newest message in the open chat.
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "r" || e.key === "R")) {
       const msgs = $activeChat?.messages ?? [];
@@ -309,6 +363,20 @@
     if (mod && (e.key === "i" || e.key === "I")) {
       e.preventDefault();
       applyWrap("*");
+      return;
+    }
+    if (e.key === "ArrowUp" && !composeText && !composeActionsOpen && !composeMenu) {
+      const ownText = [...($activeChat?.messages ?? [])]
+        .reverse()
+        .find((message) =>
+          message.type === "TEXT" &&
+          (!message.authorDeviceId || message.authorDeviceId === $identity?.deviceId)
+        );
+      if (ownText) {
+        e.preventDefault();
+        editRequestedId = ownText.id;
+        composeTextarea?.blur();
+      }
       return;
     }
     // Enter sends; Shift+Enter inserts a newline.
@@ -376,12 +444,57 @@
     editValue = "";
   }
 
+  /** Retention windows offered in the chat menu. 0 is the "keep everything" case. */
+  const RETENTION_CHOICES = [
+    { days: 0, label: "Keep forever" },
+    { days: 7, label: "7 days" },
+    { days: 14, label: "14 days" },
+    { days: 30, label: "30 days" },
+    { days: 90, label: "90 days" },
+    { days: 365, label: "1 year" },
+  ];
+
+  /**
+   * Turning this on deletes everywhere, immediately, for anything already past the
+   * window — so say how many that is before doing it rather than after.
+   */
+  async function setRetention(days: number) {
+    const c = $activeChat;
+    if (!c || metaBusy) return;
+    if ((c.metadata.retentionDays ?? 0) === days) return;
+    if (days > 0) {
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      const doomed = c.messages.filter(
+        (m) => m.createdAt < cutoff && !m.isStarred && !(m.reminderAt && m.reminderAt > Date.now()),
+      ).length;
+      const detail =
+        doomed > 0
+          ? `${doomed} existing ${doomed === 1 ? "message is" : "messages are"} already older than that and will be deleted on every device.`
+          : "Nothing in this chat is older than that yet.";
+      if (
+        !(await requestConfirmation(
+          `Delete messages in this chat older than ${days} days? ${detail} Starred messages and ones with an upcoming reminder are kept.`,
+          { title: "Auto-delete old messages", confirmLabel: "Turn on", dangerous: doomed > 0 },
+        ))
+      ) {
+        return;
+      }
+    }
+    await runMeta({ retentionDays: days });
+    try {
+      await api.applyChatRetention();
+    } catch (e) {
+      console.error("apply retention failed", e);
+    }
+  }
+
   async function runMeta(patch: {
     name?: string;
     isPinned?: boolean;
     isArchived?: boolean;
     tags?: string[];
     remoteMessagesOnLeft?: boolean;
+    retentionDays?: number;
   }) {
     const c = $activeChat;
     if (!c || metaBusy) return;
@@ -476,7 +589,7 @@
     const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
     if (
       prefs.askBeforeDeleting &&
-      !confirm(
+      !await requestConfirmation(
         `Delete "${c.metadata.name}"? This removes it on every paired device and can't be undone.`,
       )
     )
@@ -747,6 +860,21 @@
             </button>
             <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
           </div>
+          <div class="settings-group"><span class="settings-label">Auto-delete old messages</span>
+            {#each RETENTION_CHOICES as choice (choice.days)}
+              <button
+                type="button"
+                class:active={(chat.metadata.retentionDays ?? 0) === choice.days}
+                onclick={() => void setRetention(choice.days)}
+              >
+                {choice.label}
+                {#if (chat.metadata.retentionDays ?? 0) === choice.days}<Check size={14} />{/if}
+              </button>
+            {/each}
+            <span class="settings-hint tiny muted">
+              Deletes on every device. Starred messages and ones with an upcoming reminder are kept.
+            </span>
+          </div>
           <div class="settings-group"><span class="settings-label">Appearance</span>
             <button
               type="button"
@@ -876,6 +1004,7 @@
       class:has-background={!!backgroundDataUrl}
       style={backgroundDataUrl ? `background-image:url(${backgroundDataUrl});` : ""}
       bind:this={scroller}
+      onscroll={updateScrollState}
     >
       {#each chat.messages as m (m.id)}
         <MessageBubble
@@ -887,11 +1016,19 @@
           onJumpToReplyTarget={jumpToMessage}
           replyTargetExists={!!m.replyToId && messageIds.has(m.replyToId)}
           highlighted={m.id === highlightedId}
+          requestEdit={m.id === editRequestedId}
+          onEditStarted={() => editRequestedId = null}
         />
       {:else}
         <div class="empty muted">No messages yet.</div>
       {/each}
     </div>
+    {#if !atBottom}
+      <button class="jump-latest" type="button" onclick={jumpToLatest} aria-label="Jump to latest messages">
+        <ArrowDown size={16} />
+        {#if newMessageCount > 0}<span>{newMessageCount} new</span>{/if}
+      </button>
+    {/if}
 
     <footer class="compose">
       {#if replyTarget}
@@ -1040,6 +1177,7 @@
 
 <style>
   .wrap {
+    position: relative;
     height: 100%;
     /* Transparent so the body dot-grid shows behind bubbles, mirroring Acy's
        "nav over grid, content shows grid" composition. */
@@ -1048,7 +1186,7 @@
   .header {
     padding: .55rem .8rem;
     background: var(--surface);
-    border-bottom: 1px solid var(--outline-variant);
+    border-bottom: 1px solid var(--border);
     gap: .75rem;
   }
   .title-block {
@@ -1084,6 +1222,23 @@
   }
   .messages.has-background { position: relative; }
   .messages.has-background > :global(*) { position: relative; z-index: 1; }
+  .jump-latest {
+    position: absolute;
+    right: 1rem;
+    bottom: 5.25rem;
+    z-index: 8;
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    padding: .45rem .65rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow);
+  }
+  .jump-latest:hover { background: var(--surface-hover); filter: none; }
+  .jump-latest span { font-size: .75rem; font-weight: 600; }
   .empty {
     margin: auto;
     text-align: center;
@@ -1097,7 +1252,7 @@
     text-align: center;
   }
   .compose {
-    border-top: 1px solid var(--outline-variant);
+    border-top: 1px solid var(--border);
     background: var(--surface);
     padding: .55rem .75rem .65rem;
     display: flex;
@@ -1116,7 +1271,7 @@
     flex-shrink: 0;
     align-self: center;
     position: relative;
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     border-radius: 12px;
   }
   .compose-input {
@@ -1126,7 +1281,7 @@
     resize: vertical;
     padding: .5rem .65rem;
     border-radius: 12px;
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     background: var(--surface-2, var(--surface));
     color: inherit;
     font: inherit;
@@ -1164,7 +1319,7 @@
     cursor: pointer;
     line-height: 0;
   }
-  .attach-group > .attach:last-child { border-left: 1px solid var(--outline-variant); }
+  .attach-group > .attach:last-child { border-left: 1px solid var(--border); }
   .attach:first-child { border-radius: 11px 0 0 11px; }
   .attach:last-child { border-radius: 0 11px 11px 0; }
   .attach:hover:not(:disabled) {
@@ -1202,7 +1357,7 @@
     flex-direction: column;
     padding: .25rem;
     background: var(--surface);
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25));
   }
@@ -1213,19 +1368,19 @@
     font: inherit;
     text-align: left;
     padding: .5rem .7rem;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .actions-menu button:hover {
     background: var(--surface-2, var(--surface));
   }
   .format-row { display:flex; align-items:center; gap:calc(.5rem + 2px); margin-bottom:.25rem; }
-  .format-close { display:inline-flex; align-items:center; justify-content:center; flex:0 0 2.5rem; width:2.5rem; height:2rem; padding:0; border:1px solid var(--outline-variant); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); }
+  .format-close { display:inline-flex; align-items:center; justify-content:center; flex:0 0 2.5rem; width:2.5rem; height:2rem; padding:0; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); }
   .format-close:hover { background:var(--surface-hover); color:var(--text); filter:none; }
-  .format-toolbar { display:flex; align-items:center; gap:2px; width:max-content; padding:2px; border:1px solid var(--outline-variant); border-radius:var(--radius-sm); background:var(--surface-2, var(--surface)); }
+  .format-toolbar { display:flex; align-items:center; gap:2px; width:max-content; padding:2px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-2, var(--surface)); }
   .format-toolbar button { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:1.8rem; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-muted); }
   .format-toolbar button:hover { background:var(--surface-hover); color:var(--text); filter:none; }
-  .format-separator { width:1px; height:1.15rem; margin:0 2px; background:var(--outline-variant); }
+  .format-separator { width:1px; height:1.15rem; margin:0 2px; background:var(--border); }
   .rec-indicator {
     display: inline-flex;
     align-items: center;
@@ -1265,7 +1420,7 @@
     display: flex;
     flex-direction: column;
     background: var(--surface);
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     border-radius: 12px;
     box-shadow: var(--shadow, 0 6px 24px rgba(0, 0, 0, .25));
     padding: .25rem;
@@ -1281,7 +1436,7 @@
     font: inherit;
     text-align: left;
     padding: .45rem .7rem;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
   }
   .ctx-menu button:hover:not(:disabled) {
@@ -1292,7 +1447,7 @@
     cursor: default;
   }
   .compose-error {
-    color: var(--error, #b00);
+    color: var(--danger);
   }
   .reply-bar {
     display: flex;
@@ -1343,7 +1498,7 @@
     max-width: 320px;
     text-align: center;
     padding: 1.75rem;
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     border-radius: 16px;
     background: var(--surface);
   }
@@ -1366,8 +1521,8 @@
   .pin-input {
     width: 100%;
     padding: .55rem .7rem;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
     background: var(--surface-2, var(--surface));
     color: inherit;
     font: inherit;
@@ -1383,7 +1538,7 @@
     align-items: center;
     gap: .35rem;
     background: transparent;
-    border: 1px solid var(--outline-variant);
+    border: 1px solid var(--border);
     color: inherit;
     font: inherit;
     font-size: .85rem;
@@ -1410,31 +1565,31 @@
   }
   .menu-btn:hover { background: var(--surface-2, var(--surface)); }
   .settings-backdrop, .settings-backdrop:hover { position:fixed; inset:32px 0 0; z-index:50; margin:0; padding:0; border:0; border-radius:0; background:rgba(0,0,0,.34); box-shadow:none; }
-  .chat-settings { position:fixed; top:32px; right:0; bottom:0; z-index:51; width:min(380px, 100vw); display:flex; flex-direction:column; background:var(--surface); border-left:1px solid var(--outline-variant); box-shadow:-10px 0 30px rgba(0,0,0,.2); }
-  .settings-head { display:flex; align-items:center; justify-content:space-between; padding:1rem; border-bottom:1px solid var(--outline-variant); }
+  .chat-settings { position:fixed; top:32px; right:0; bottom:0; z-index:51; width:min(380px, 100vw); display:flex; flex-direction:column; background:var(--surface); border-left:1px solid var(--border); box-shadow:-10px 0 30px rgba(0,0,0,.2); }
+  .settings-head { display:flex; align-items:center; justify-content:space-between; padding:1rem; border-bottom:1px solid var(--border); }
   .icon-close { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:2rem; padding:0; border:0; background:transparent; color:var(--text-muted); }
   .icon-close:hover { background:var(--surface-hover); color:var(--text); filter:none; }
   .settings-scroll { overflow:auto; padding:.75rem; }
-  .settings-group { display:flex; flex-direction:column; padding:.4rem 0 .75rem; border-bottom:1px solid var(--outline-variant); }
+  .settings-group { display:flex; flex-direction:column; padding:.4rem 0 .75rem; border-bottom:1px solid var(--border); }
   .settings-label { padding:.35rem .6rem; color:var(--text-muted); font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
   .settings-group button { border:0; background:transparent; color:inherit; text-align:left; padding:.6rem; border-radius:8px; font:inherit; }
   .settings-group button:hover { background:var(--surface-hover); filter:none; }
-  .settings-group button.danger { color:var(--error, #b00); }
+  .settings-group button.danger { color:var(--danger); }
   .danger-group { border-bottom:0; }
   .meta-editor {
     display: flex;
     align-items: center;
     gap: .5rem;
     padding: .55rem .75rem;
-    border-bottom: 1px solid var(--outline-variant);
+    border-bottom: 1px solid var(--border);
     background: var(--surface);
   }
   .pin-editor { flex-wrap: wrap; }
   .meta-input {
     flex: 1;
     padding: .45rem .6rem;
-    border-radius: 10px;
-    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
     background: var(--surface-2, var(--surface));
     color: inherit;
     font: inherit;

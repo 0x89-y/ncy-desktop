@@ -145,3 +145,11 @@ export function avatarColor(seed: string): string {
   }
   return PALETTE[h % PALETTE.length];
 }
+
+/** Human-readable byte count. Shared by the file card and transfer progress. */
+export function formatFileSize(bytes: number | null | undefined): string {
+  if (bytes == null) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

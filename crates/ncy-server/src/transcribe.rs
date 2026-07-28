@@ -66,16 +66,13 @@ async fn dispatcher(deps: Arc<TranscribeDeps>, job_tx: mpsc::Sender<Job>) {
     loop {
         match rx.recv().await {
             Ok(SyncEvent::EventReceived { chat_id, event_id }) => {
-                match inspect(&deps, &chat_id, &event_id, &mut handled) {
-                    Some(job) => {
-                        if deps.blobs.exists(&job.hash, "voice") {
-                            let _ = job_tx.send(job).await;
-                        } else {
-                            tracing::debug!("voice blob {} not here yet — parking", &job.hash[..8]);
-                            pending.entry(job.hash.clone()).or_default().push(job);
-                        }
+                if let Some(job) = inspect(&deps, &chat_id, &event_id, &mut handled) {
+                    if deps.blobs.exists(&job.hash, "voice") {
+                        let _ = job_tx.send(job).await;
+                    } else {
+                        tracing::debug!("voice blob {} not here yet — parking", &job.hash[..8]);
+                        pending.entry(job.hash.clone()).or_default().push(job);
                     }
-                    None => {}
                 }
             }
             Ok(SyncEvent::BlobArrived { hash }) => {

@@ -13,7 +13,7 @@ use crate::storage::{
     MaterializedChat, OutboundPeer, Pairing,
 };
 use crate::sync::pear::valid_public_key;
-use crate::sync::{author_event, SyncEvent};
+use crate::sync::{author_event, author_event_with_profile, SyncEvent};
 use crate::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,7 +400,12 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
         .iter()
         .any(|pairing| pairing.phone_id.is_none());
     let pear_public_key = if has_unused_invitation {
-        pairing_pear_public_key(&state).await?
+        let mode = state.settings.read().await.sync_transport_mode;
+        let key = state.pear_public_key.read().await.clone();
+        if mode.uses_pear() && key.is_none() {
+            return Err("Pear is not ready to display this pairing invitation".to_string());
+        }
+        key
     } else {
         None
     };
@@ -1426,17 +1431,34 @@ fn current_metadata(events: &EventStore, chat_id: &str) -> Result<ChatMetadata, 
 /// Create a brand-new chat from the desktop — the primitive that makes the
 /// desktop usable with no phone at all. Emits a `ChatMetadataChanged` for a fresh
 /// chatId via the normal author pipeline (HLC tick → persist → broadcast → bus),
-/// so it shows immediately and syncs to any connected peer. A new chat has no
-/// prior events, so it carries an empty profile → the "Default" bucket; a phone
-/// that later receives it files it under its active profile.
+/// so it shows immediately and syncs to any connected peer. The caller supplies
+/// either an existing/new profile stamp or empty strings for the Default profile.
 #[tauri::command]
 pub async fn author_create_chat(
     state: State<'_, AppState>,
     name: String,
+    profile_id: String,
+    profile_name: String,
 ) -> Result<String, String> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err("name cannot be empty".into());
+    }
+    let profile_id = profile_id.trim();
+    let profile_name = profile_name.trim();
+    if profile_id.is_empty() != profile_name.is_empty() {
+        return Err("profile ID and name must either both be empty or both be set".into());
+    }
+    if !profile_id.is_empty()
+        && (profile_id.len() > 128
+            || !profile_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'))
+    {
+        return Err("invalid profile ID".into());
+    }
+    if profile_name.len() > 120 {
+        return Err("profile name is too long".into());
     }
     let chat_id = uuid::Uuid::new_v4().to_string();
     let meta = ChatMetadata {
@@ -1454,9 +1476,10 @@ pub async fn author_create_chat(
         hide_name: false,
         protection_salt: None,
         remote_messages_on_left: false,
+        retention_days: None,
     };
     let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
-    author_event(
+    author_event_with_profile(
         &state.clock,
         &state.events,
         &state.outbound,
@@ -1465,6 +1488,8 @@ pub async fn author_create_chat(
         &chat_id,
         op_type::CHAT_METADATA_CHANGED,
         payload,
+        profile_id,
+        profile_name,
     )
     .map_err(|e| e.to_string())?;
     Ok(chat_id)
@@ -1475,6 +1500,9 @@ pub async fn author_create_chat(
 /// createdAt, bubble style, hideName) is preserved — important because
 /// `ChatMetadataChanged` is whole-record LWW, so dropping a field would wipe it on
 /// the phone.
+// One optional parameter per patchable field is the shape Tauri commands take; a
+// struct would have to be mirrored in TypeScript for no gain.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn author_update_chat_meta(
     state: State<'_, AppState>,
@@ -1484,6 +1512,10 @@ pub async fn author_update_chat_meta(
     is_archived: Option<bool>,
     tags: Option<Vec<String>>,
     remote_messages_on_left: Option<bool>,
+    // Absent leaves the rule alone; `0` clears it; anything else sets the window.
+    // A nested `Option<Option<_>>` would be the natural shape but serde cannot tell
+    // an absent field from an explicit `null`, so both would arrive as `None`.
+    retention_days: Option<u32>,
 ) -> Result<(), String> {
     let mut meta = current_metadata(&state.events, &chat_id)?;
     if let Some(n) = name {
@@ -1508,6 +1540,11 @@ pub async fn author_update_chat_meta(
     }
     if let Some(enabled) = remote_messages_on_left {
         meta.remote_messages_on_left = enabled;
+    }
+    if let Some(days) = retention_days {
+        // Bounded: beyond a decade this is indistinguishable from "keep forever" and
+        // only invites overflow in the cutoff arithmetic.
+        meta.retention_days = Some(days).filter(|d| *d > 0 && *d <= 3650);
     }
     let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
     author_event(
@@ -1664,6 +1701,7 @@ pub async fn author_delete_chat(state: State<'_, AppState>, chat_id: String) -> 
         .events
         .replace_chat(&chat_id, std::slice::from_ref(&wire))
         .map_err(|e| e.to_string())?;
+    schedule_blob_gc(&state);
     Ok(())
 }
 
@@ -1685,6 +1723,7 @@ pub async fn author_delete_message(
         payload,
     )
     .map_err(|e| e.to_string())?;
+    schedule_blob_gc(&state);
     Ok(())
 }
 
@@ -1963,16 +2002,291 @@ pub async fn download_blob_anyway(
     media_type: String,
 ) -> Result<(), String> {
     validate_blob_ref(&hash, &media_type)?;
-    if media_type != "file" {
-        return Err("manual download is only available for file attachments".into());
-    }
+    // Voice and image blobs can also fail to arrive — a dropped Pear transfer, or
+    // an automatic-download limit that skipped them — and the user is then stuck
+    // looking at "not on this device" with no recourse. The request path below is
+    // media-type agnostic, so there is no reason to restrict this to attachments.
     if state.blobs.exists(&hash, &media_type) {
         return Ok(());
     }
+    // Asking for it explicitly overrides an earlier eviction, otherwise the fetch
+    // paths would keep skipping it.
+    state.blobs.clear_eviction(&hash, &media_type);
     state
         .blob_requests
-        .send(crate::sync::ManualBlobRequest { hash, media_type })
+        .send(crate::sync::ManualBlobRequest {
+            hash,
+            media_type,
+            cancel: false,
+        })
         .map_err(|_| "no connected device is available to provide this file".to_string())?;
+    Ok(())
+}
+
+/// True when this device dropped the blob on purpose.
+///
+/// The UI needs this to tell "removed on purpose" from "still arriving" — both are
+/// simply "not on disk", and showing an evicted file as perpetually downloading is
+/// worse than showing nothing.
+#[tauri::command]
+pub async fn blob_evicted(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<bool, String> {
+    validate_blob_ref(&hash, &media_type)?;
+    Ok(state.blobs.is_evicted(&hash, &media_type))
+}
+
+/// Drop this device's copy of a blob while keeping the message.
+///
+/// Local, deliberate, and sticky: the message keeps its attachment, but this device
+/// stops holding the bytes and will not re-fetch them automatically. Lets an
+/// always-on archive peer keep everything while a laptop or phone holds a subset.
+/// "Download anyway" reverses it.
+#[tauri::command]
+pub async fn evict_blob(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<u64, String> {
+    validate_blob_ref(&hash, &media_type)?;
+    // Deliberately no `BlobFailed` on the bus: the frontend refreshes its own view,
+    // and a "transfer failed" banner would misreport a choice the user just made.
+    state
+        .blobs
+        .evict(&hash, &media_type)
+        .map_err(|e| e.to_string())
+}
+
+/// Remove the content of already-deleted messages from the event logs.
+///
+/// Deleting a message used to only write a tombstone: the `MessageCreated` holding
+/// the text stayed in the log, so anything ever deleted was still readable on disk.
+/// Deletion now scrubs as it goes; this cleans up what was deleted before that.
+///
+/// Idempotent and cheap on repeat runs, so it is safe on every launch.
+#[tauri::command]
+pub async fn scrub_deleted_message_content(state: State<'_, AppState>) -> Result<usize, String> {
+    let events = state.events.clone();
+    let dropped = tokio::task::spawn_blocking(move || events.scrub_tombstoned_messages())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    if dropped > 0 {
+        tracing::info!("scrubbed {dropped} event(s) belonging to deleted messages");
+    }
+    Ok(dropped)
+}
+
+/// Forget how much of the log each device has been sent, forcing a full replay.
+///
+/// The outbound watermark is advanced optimistically as events are written to the
+/// connection and persisted when the peer acks. A connection that dies partway
+/// through — or, historically, one whose frames were being silently truncated —
+/// can leave it standing past what the peer actually applied. Everything below it
+/// is then unreachable: catch-up skips it forever, and a manual sync honestly
+/// reports zero, because by its own bookkeeping there is nothing to send.
+///
+/// Deletions are the visible casualty. A message whose `MessageCreated` arrived
+/// but whose `MessageTombstoned` fell into that gap stays on the peer for good.
+///
+/// Clearing the watermarks costs one full replay per device and nothing else:
+/// event IDs are idempotent, so re-delivered events are absorbed, and pairing
+/// trust is untouched. Returns how many watermarks were cleared.
+/// Sync must be restarted for this to take effect: a live session clones the
+/// watermark when it connects, so rewriting the file underneath it changes nothing
+/// until it reconnects. The restore path already does this dance.
+#[tauri::command]
+pub async fn force_full_resync(state: State<'_, AppState>) -> Result<usize, String> {
+    let restart_sync = state.sync_shutdown.lock().unwrap().is_some();
+    if restart_sync {
+        crate::apply_sync_enabled(state.inner(), false).await;
+    }
+    let result = {
+        let mut pairings = state.pairings.write().await;
+        let mut peers = state.peers.write().await;
+        let cleared = reset_sync_watermarks(&mut pairings, &mut peers);
+        if cleared == 0 {
+            Ok(0usize)
+        } else {
+            save_pairings(&state.paths.pairings, &pairings)
+                .map_err(|e| e.to_string())
+                .and_then(|_| {
+                    save_peers(&state.paths.peers, &peers).map_err(|e| e.to_string())
+                })
+                .map(|_| cleared)
+        }
+    };
+    if restart_sync {
+        crate::apply_sync_enabled(state.inner(), true).await;
+    }
+    let cleared = result?;
+    if cleared > 0 {
+        tracing::info!("cleared {cleared} sync watermark(s); peers replay on reconnect");
+    }
+    Ok(cleared)
+}
+
+/// Delete messages past their chat's retention window, everywhere.
+///
+/// Ordinary tombstones, so the deletion syncs exactly like a manual one and every
+/// paired device converges. Any device may run this; a peer that already tombstoned
+/// the same message absorbs the duplicate. Returns how many were removed.
+///
+/// Starred messages and ones with a future reminder are exempt — see
+/// `storage::retention::expired_message_ids`.
+#[tauri::command]
+pub async fn apply_chat_retention(state: State<'_, AppState>) -> Result<usize, String> {
+    let now = now_ms();
+    let chat_ids = state.events.list_chat_ids().map_err(|e| e.to_string())?;
+    let mut deleted = 0usize;
+
+    for chat_id in chat_ids {
+        let Ok(meta) = current_metadata(&state.events, &chat_id) else {
+            continue;
+        };
+        if meta.retention_days.is_none_or(|days| days == 0) {
+            continue;
+        }
+        // Materialize rather than reading raw events: a protected chat's bodies are
+        // sealed, and `materialize` is what applies the key when one is cached. A
+        // locked chat yields placeholders whose `is_starred` we cannot trust, so it
+        // is skipped rather than swept blind.
+        let Ok(evts) = state.events.read_chat(&chat_id) else {
+            continue;
+        };
+        let key = state.keystore.key_for(&chat_id);
+        let Some(chat) = crate::storage::materialize::materialize_with_key(evts, key.as_ref())
+        else {
+            continue;
+        };
+        // `is_unlocked` is literally "a key is cached", so it is false for every
+        // ordinary chat too — only a *protected* chat without one is unreadable.
+        // Skipping on `!is_unlocked` alone would skip every unprotected chat, which
+        // is nearly all of them. A locked chat yields placeholder bodies whose
+        // `is_starred` cannot be trusted, so it waits until unlocked.
+        if meta.is_protected && !chat.is_unlocked {
+            continue;
+        }
+        for message_id in crate::storage::retention::expired_message_ids(&meta, &chat.messages, now)
+        {
+            let payload = serde_json::json!({ "messageId": message_id });
+            if author_event(
+                &state.clock,
+                &state.events,
+                &state.outbound,
+                &state.bus,
+                &state.identity_device_id,
+                &chat_id,
+                op_type::MESSAGE_TOMBSTONED,
+                payload,
+            )
+            .is_ok()
+            {
+                deleted += 1;
+            }
+        }
+    }
+
+    if deleted > 0 {
+        tracing::info!("retention: deleted {deleted} expired message(s)");
+        // Their attachments are now unreferenced.
+        schedule_blob_gc(&state);
+    }
+    Ok(deleted)
+}
+
+/// Quiet period after the last deletion before the automatic sweep runs.
+const BLOB_GC_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Queue a background sweep after a deletion.
+///
+/// A blob cannot simply be deleted alongside its message: the store is
+/// content-addressed, so the same photo sent to three chats is *one* file, and one
+/// of those messages going away says nothing about the other two. Deciding whether
+/// the bytes are still wanted means the same whole-log scan the sweep already does.
+/// So the delete path just marks the store dirty and the scan runs once, shortly
+/// after the user stops deleting things — rather than once per deleted message.
+pub fn schedule_blob_gc(state: &AppState) {
+    // A sweep is already pending; it will pick up this deletion too.
+    if state
+        .blob_gc_pending
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+    let events = state.events.clone();
+    let blobs = state.blobs.clone();
+    let keystore = state.keystore.clone();
+    let pending = state.blob_gc_pending.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(BLOB_GC_DEBOUNCE).await;
+        pending.store(false, std::sync::atomic::Ordering::SeqCst);
+        let report = tokio::task::spawn_blocking(move || {
+            crate::sync::collect_unreferenced_blobs(&events, &blobs, &keystore, false)
+        })
+        .await;
+        match report {
+            Ok(Ok(report)) if report.deleted > 0 => tracing::info!(
+                "blob gc: reclaimed {} bytes across {} files",
+                report.reclaimed_bytes,
+                report.deleted
+            ),
+            Ok(Ok(report)) if !report.locked_chats.is_empty() => tracing::debug!(
+                "blob gc: skipped, {} protected chat(s) locked",
+                report.locked_chats.len()
+            ),
+            Ok(Err(e)) => tracing::warn!("blob gc failed: {e}"),
+            _ => {}
+        }
+    });
+}
+
+/// Measure the media store, or sweep blobs no stored event refers to any more.
+///
+/// Nothing has ever removed a blob: the store is content-addressed and append-only,
+/// so deleting a message leaves its attachment on disk indefinitely. That is both
+/// unbounded growth and a privacy surprise — re-sending a "deleted" file completes
+/// instantly because the bytes never left.
+///
+/// `dry_run` measures without touching anything. If any protected chat is locked its
+/// media references are still sealed, so the sweep reports those chats and deletes
+/// nothing rather than guessing.
+#[tauri::command]
+pub async fn collect_unused_blobs(
+    state: State<'_, AppState>,
+    dry_run: bool,
+) -> Result<crate::sync::BlobGcReport, String> {
+    let events = state.events.clone();
+    let blobs = state.blobs.clone();
+    let keystore = state.keystore.clone();
+    // Walks every chat log and stats the whole store — keep it off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        crate::sync::collect_unreferenced_blobs(&events, &blobs, &keystore, dry_run)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Abandon an in-flight download. The partial file is discarded and the automatic
+/// reconcile stops asking for this blob until the user requests it again — without
+/// that it would simply restart on the next sweep.
+#[tauri::command]
+pub async fn cancel_blob_download(
+    state: State<'_, AppState>,
+    hash: String,
+    media_type: String,
+) -> Result<(), String> {
+    validate_blob_ref(&hash, &media_type)?;
+    // A cancel with nothing listening is a no-op, not an error: the transfer is
+    // already not running, which is exactly what the user asked for.
+    let _ = state.blob_requests.send(crate::sync::ManualBlobRequest {
+        hash,
+        media_type,
+        cancel: true,
+    });
     Ok(())
 }
 
@@ -2089,6 +2403,14 @@ pub struct ImportSummary {
 /// truth) plus the content-addressed `blobs/`. Device-local config (identity,
 /// pairings, peers, settings) is intentionally excluded — restoring it onto
 /// another machine would clone the deviceId and break sync.
+fn verified_import_blob_name(name: &str, bytes: &[u8]) -> Option<String> {
+    if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let normalized = name.to_ascii_lowercase();
+    (crate::sync::blob::sha256_hex(bytes) == normalized).then_some(normalized)
+}
+
 #[tauri::command]
 pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Result<(), String> {
     export_backup_to(state.inner(), &dest_path)
@@ -2096,7 +2418,7 @@ pub async fn export_backup(state: State<'_, AppState>, dest_path: String) -> Res
 
 fn export_backup_to(state: &AppState, dest_path: &str) -> Result<(), String> {
     use std::io::Write;
-    let file = std::fs::File::create(&dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
+    let file = std::fs::File::create(dest_path).map_err(|e| format!("create {dest_path}: {e}"))?;
     let mut zip = zip::ZipWriter::new(file);
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
@@ -2132,6 +2454,7 @@ fn export_backup_to(state: &AppState, dest_path: &str) -> Result<(), String> {
 
     copy_dir(&state.paths.events, "events", true)?;
     copy_dir(state.blobs.root(), "blobs", false)?;
+    #[allow(clippy::drop_non_drop)] // end the closure borrow of zip before writing the graveyard
     drop(copy_dir);
     let graveyard = state.paths.events.join("chat-tombstones.graveyard");
     if graveyard.is_file() {
@@ -2310,12 +2633,15 @@ pub async fn import_backup(
                 {
                     continue;
                 }
-                let dest = state.blobs.root().join(fname);
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+                let Some(verified_name) = verified_import_blob_name(fname, &bytes) else {
+                    continue;
+                };
+                let dest = state.blobs.root().join(verified_name);
                 if dest.exists() {
                     continue;
                 }
-                let mut bytes = Vec::new();
-                entry.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
                 if std::fs::write(&dest, &bytes).is_ok() {
                     blobs_added += 1;
                 }
@@ -2661,6 +2987,16 @@ fn ev_to_json(ev: &SyncEvent) -> serde_json::Value {
         SyncEvent::BlobArrived { hash } => {
             serde_json::json!({"kind":"blob-arrived","hash":hash})
         }
+        SyncEvent::BlobProgress {
+            hash,
+            received,
+            total,
+        } => {
+            serde_json::json!({"kind":"blob-progress","hash":hash,"received":received,"total":total})
+        }
+        SyncEvent::BlobFailed { hash, reason } => {
+            serde_json::json!({"kind":"blob-failed","hash":hash,"reason":reason})
+        }
         SyncEvent::PeerDisconnected { peer } => {
             serde_json::json!({"kind":"peer-disconnected","peer":peer})
         }
@@ -2771,6 +3107,18 @@ mod tests {
     #[test]
     fn unrecognized_bytes_are_rejected() {
         assert!(image::guess_format(b"not an image at all").is_err());
+    }
+
+    #[test]
+    fn imported_blob_name_must_match_its_content() {
+        let bytes = b"verified blob";
+        let hash = crate::sync::blob::sha256_hex(bytes);
+        assert_eq!(
+            verified_import_blob_name(&hash.to_uppercase(), bytes),
+            Some(hash)
+        );
+        assert_eq!(verified_import_blob_name(&"0".repeat(64), bytes), None);
+        assert_eq!(verified_import_blob_name("../blob", bytes), None);
     }
 
     /// A fresh install has no `desktop_prefs.json` at all, so it takes `Default`:

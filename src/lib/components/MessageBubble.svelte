@@ -1,9 +1,13 @@
 <script lang="ts">
-  import type { Message } from "../ipc";
+  import { requestConfirmation } from "../stores/confirm";
+  import type { Message, MediaType } from "../ipc";
+  import { onDestroy } from "svelte";
   import { save as saveDialog } from "@tauri-apps/plugin-dialog";
   import { api, extractMediaHash } from "../ipc";
   import {
     arrivedBlobs,
+    blobFailures,
+    clearBlobState,
     settings,
     transcribing,
     transcriptionErrors,
@@ -11,11 +15,13 @@
     messageDensity,
     markTranscribing,
     unmarkTranscribing,
+    markMessageEdit,
     setTranscriptionError,
   } from "../stores/app";
   import { openViewer } from "../stores/viewer";
   import RichText from "./RichText.svelte";
-  import { formatFullTime, formatMessageTime, replyPreviewText } from "../format";
+  import TransferStatus from "./TransferStatus.svelte";
+  import { formatFileSize, formatFullTime, formatMessageTime, replyPreviewText } from "../format";
   import { parseMarkdown } from "../markdown";
   import {
     Mic,
@@ -42,6 +48,8 @@
     replyTargetExists = false,
     highlighted = false,
     isRemote = false,
+    requestEdit = false,
+    onEditStarted,
   }: {
     message: Message;
     bubbleColor: string | null;
@@ -53,6 +61,8 @@
     /** Briefly tinted after a jump landed on this message. */
     highlighted?: boolean;
     isRemote?: boolean;
+    requestEdit?: boolean;
+    onEditStarted?: () => void;
   } = $props();
 
   const quoteText = $derived(replyPreviewText(message.replyToPreview, message.replyToType));
@@ -86,22 +96,45 @@
   let busy = $state(false);
   let editing = $state(false);
   let editText = $state("");
+  let editTextarea: HTMLTextAreaElement | undefined = $state();
   let editError = $state<string | null>(null);
   let reminding = $state(false);
   let reminderInput = $state("");
 
   // Right-click context menu (replaces the always-visible action row).
   let ctx = $state<{ x: number; y: number } | null>(null);
+  let ctxMenuEl: HTMLDivElement | undefined = $state();
   function openCtx(e: MouseEvent) {
     if (editing || reminding) return;
     e.preventDefault();
     e.stopPropagation();
-    // Menu is ~180×180; keep it on-screen.
-    const x = Math.min(e.clientX, window.innerWidth - 190);
-    const y = Math.min(e.clientY, window.innerHeight - 190);
-    ctx = { x, y };
+    ctx = { x: e.clientX, y: e.clientY };
   }
+  $effect(() => {
+    const menu = ctx;
+    const el = ctxMenuEl;
+    if (!menu || !el) return;
+    const pad = 8;
+    const rect = el.getBoundingClientRect();
+    el.style.left = `${Math.max(pad, Math.min(menu.x, window.innerWidth - rect.width - pad))}px`;
+    el.style.top = `${Math.max(pad, Math.min(menu.y, window.innerHeight - rect.height - pad))}px`;
+  });
+
   function closeCtx() { ctx = null; }
+
+  // Escape closes the context menu. Registered only while it is open — a static
+  // `<svelte:window>` here would mean one listener per message bubble — and in the
+  // capture phase so this top-most layer wins regardless of mount order.
+  $effect(() => {
+    if (!ctx) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopImmediatePropagation();
+      closeCtx();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
 
   // Reactions — a small delayed hover strip for the configured common cases.
   let hovering = $state(false);
@@ -255,7 +288,7 @@
     const prefs = await api.getDesktopPrefs().catch(() => ({ askBeforeDeleting: true }));
     if (
       prefs.askBeforeDeleting &&
-      !confirm("Delete this message? This will sync the deletion back to the phone.")
+      !await requestConfirmation("Delete this message? This will sync the deletion back to the phone.", { title: "Delete message", confirmLabel: "Delete", dangerous: true })
     )
       return;
     busy = true;
@@ -272,12 +305,25 @@
     editText = flattenContent(message);
     editError = null;
     editing = true;
+    markMessageEdit(message.id, true);
+    onEditStarted?.();
+    queueMicrotask(() => {
+      editTextarea?.focus();
+      editTextarea?.setSelectionRange(editText.length, editText.length);
+    });
   }
 
-  function cancelEdit() {
+  $effect(() => {
+    if (requestEdit && !editing && !busy) startEdit();
+  });
+
+  async function cancelEdit() {
+    if (editText !== flattenContent(message) && !await requestConfirmation("Discard the unsaved message edit?", { title: "Unsaved edit", confirmLabel: "Discard", dangerous: true })) return;
     editing = false;
+    markMessageEdit(message.id, false);
     editError = null;
   }
+
 
   async function saveEdit() {
     if (busy) return;
@@ -291,6 +337,7 @@
     try {
       await api.authorEditBlocks(message.chatId, message.id, parseMarkdown(text));
       editing = false;
+      markMessageEdit(message.id, false);
     } catch (e: any) {
       editError = typeof e === "string" ? e : (e?.message ?? "edit failed");
     } finally {
@@ -301,7 +348,7 @@
   function onEditKey(e: KeyboardEvent) {
     if (e.key === "Escape") {
       e.preventDefault();
-      cancelEdit();
+      void cancelEdit();
     } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void saveEdit();
@@ -335,6 +382,8 @@
   let imageDataUrl = $state<string | null>(null);
   let imageMissing = $state(false);
   let fileAvailable = $state(false);
+  /** This device dropped the media on purpose — distinct from "still arriving". */
+  let mediaEvicted = $state(false);
   let fileSaving = $state(false);
   let fileManuallyRequested = $state(false);
   const fileDeferred = $derived(
@@ -410,6 +459,7 @@
       return;
     }
     voiceMissing = false;
+    api.blobEvicted(h, "voice").then((evicted) => (mediaEvicted = evicted)).catch(() => {});
     api
       .readBlob(h, "voice")
       .then((b64) => {
@@ -432,6 +482,7 @@
       return;
     }
     imageMissing = false;
+    api.blobEvicted(h, "image").then((evicted) => (mediaEvicted = evicted)).catch(() => {});
     api
       .readBlob(h, "image")
       .then((b64) => {
@@ -455,14 +506,12 @@
     void arrived;
     api.blobExists(h, "file").then((exists) => (fileAvailable = exists))
       .catch((e) => console.error("blobExists file", e));
+    // "Absent" alone cannot say whether it is still coming or was dropped on
+    // purpose, and calling a deliberately removed file "downloading…" forever is
+    // the worse of the two guesses.
+    api.blobEvicted(h, "file").then((evicted) => (mediaEvicted = evicted))
+      .catch(() => {});
   });
-
-  function formatFileSize(bytes: number | null | undefined): string {
-    if (bytes == null) return "";
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
 
   async function copyMessage() {
     const text = message.type === "CHECKLIST"
@@ -497,16 +546,75 @@
     }
   }
 
-  async function downloadFileAnyway() {
-    if (!fileHash || fileManuallyRequested) return;
-    fileManuallyRequested = true;
+  let voiceManuallyRequested = $state(false);
+  let imageManuallyRequested = $state(false);
+
+  /** Ask a connected device for a blob that never arrived. Voice and image blobs
+   *  can go missing the same way attachments do — a dropped transfer, or an
+   *  automatic-download limit — so all three offer the same recovery. */
+  /** The one blob this message holds locally, if any — what "Remove download" acts on. */
+  const localMedia = $derived.by<{ hash: string; mediaType: MediaType } | null>(() => {
+    if (voiceHash && voiceDataUrl) return { hash: voiceHash, mediaType: "voice" };
+    if (imageHash && imageDataUrl) return { hash: imageHash, mediaType: "image" };
+    if (fileHash && fileAvailable) return { hash: fileHash, mediaType: "file" };
+    return null;
+  });
+
+  /**
+   * Drop this device's copy while keeping the message. Deliberately sticky — the
+   * sync layer records the eviction so it will not silently re-download, which is
+   * what makes "archive server keeps everything, this device keeps a subset" work.
+   */
+  async function removeDownload() {
+    const target = localMedia;
+    if (!target || busy) return;
+    if (
+      !(await requestConfirmation(
+        "Remove this file from this device? The message stays, and you can download it again from any device that still has it.",
+        { title: "Remove download", confirmLabel: "Remove", dangerous: true },
+      ))
+    ) {
+      return;
+    }
     try {
-      await api.downloadBlobAnyway(fileHash);
+      await api.evictBlob(target.hash, target.mediaType);
+      // The effects that decide whether this media is present key off `arrivedBlobs`
+      // and the hash — neither of which eviction changes on its own, so without this
+      // the bytes are gone from disk while the UI keeps showing the message as
+      // holding them. Dropping the hash re-runs them, and they land on "not on this
+      // device" with a download button, which is the correct state.
+      arrivedBlobs.update((s) => {
+        if (!s.has(target.hash)) return s;
+        const next = new Set(s);
+        next.delete(target.hash);
+        return next;
+      });
+      clearBlobState(target.hash);
     } catch (e) {
-      fileManuallyRequested = false;
+      console.error("evict blob failed", e);
+    }
+  }
+
+  async function requestBlobAnyway(hash: string | null, mediaType: "voice" | "image" | "file") {
+    if (!hash) return;
+    const setRequested = (value: boolean) => {
+      if (mediaType === "voice") voiceManuallyRequested = value;
+      else if (mediaType === "image") imageManuallyRequested = value;
+      else fileManuallyRequested = value;
+    };
+    setRequested(true);
+    // Drop any stale failure so the retry shows as in-flight rather than staying
+    // stuck on the previous error.
+    clearBlobState(hash);
+    try {
+      await api.downloadBlobAnyway(hash, mediaType);
+    } catch (e) {
+      setRequested(false);
       console.error("manual blob download", e);
     }
   }
+
+  onDestroy(() => markMessageEdit(message.id, false));
 </script>
 
 <div
@@ -530,6 +638,16 @@
         aria-label="Reply"
         onclick={() => onReply?.(message)}
       ><Reply size={14} /></button>
+      {#if message.type === "TEXT"}
+        <button
+          type="button"
+          class="rx-quick"
+          disabled={busy}
+          title="Edit"
+          aria-label="Edit"
+          onclick={startEdit}
+        ><Pencil size={14} /></button>
+      {/if}
       {#each $quickReactions as e (e)}
         <button
           type="button"
@@ -631,13 +749,24 @@
         {:else if voiceHash}
           <div class="row muted tiny">
             <span class="icon"><Mic size={14} strokeWidth={2.25} /></span>
-            <span>
-              {#if voiceMissing}
-                Voice message · not on this device
-              {:else}
-                Voice message{message.voiceDurationMs ? ` · ${Math.round(message.voiceDurationMs / 1000)}s` : ""} · downloading…
-              {/if}
-            </span>
+            <TransferStatus
+              hash={voiceHash}
+              mediaType="voice"
+              label="Voice message"
+              idleText={mediaEvicted
+                ? "Voice message · removed from this device"
+                : voiceMissing
+                  ? "Voice message · not on this device"
+                  : `Voice message${message.voiceDurationMs ? ` · ${Math.round(message.voiceDurationMs / 1000)}s` : ""} · downloading…`}
+            />
+            {#if voiceMissing || mediaEvicted || $blobFailures.has(voiceHash)}
+              <button
+                type="button"
+                class="fetch-anyway"
+                disabled={voiceManuallyRequested}
+                onclick={() => void requestBlobAnyway(voiceHash, "voice")}
+              >{voiceManuallyRequested ? "Requested…" : mediaEvicted ? "Download again" : "Download anyway"}</button>
+            {/if}
           </div>
         {:else}
           <div class="row muted tiny">
@@ -684,7 +813,24 @@
       {:else if imageHash}
         <div class="image-placeholder muted tiny row">
           <ImageIcon size={14} strokeWidth={2.25} />
-          <span>{imageMissing ? "Image · not on this device" : "Image · downloading…"}</span>
+          <TransferStatus
+            hash={imageHash}
+            mediaType="image"
+            label="Image"
+            idleText={mediaEvicted
+              ? "Image · removed from this device"
+              : imageMissing
+                ? "Image · not on this device"
+                : "Image · downloading…"}
+          />
+          {#if imageMissing || mediaEvicted || $blobFailures.has(imageHash)}
+            <button
+              type="button"
+              class="fetch-anyway"
+              disabled={imageManuallyRequested}
+              onclick={() => void requestBlobAnyway(imageHash, "image")}
+            >{imageManuallyRequested ? "Requested…" : mediaEvicted ? "Download again" : "Download anyway"}</button>
+          {/if}
         </div>
       {:else}
         <div class="image-placeholder muted tiny row">
@@ -694,33 +840,61 @@
       {/if}
     {:else if message.type === "FILE"}
       {#if fileAttachment}
+        {@const fileFailed = !!fileHash && $blobFailures.has(fileHash)}
         <button
           type="button"
           class="file-card"
-          disabled={(!fileAvailable && !fileDeferred) || fileSaving}
-          onclick={() => fileDeferred ? void downloadFileAnyway() : void downloadFile()}
-          title={fileAvailable ? "Save file" : fileDeferred ? "Download anyway" : "Downloading file"}
+          disabled={(!fileAvailable && !fileDeferred && !fileFailed) || fileSaving}
+          onclick={() => fileAvailable ? void downloadFile() : void requestBlobAnyway(fileHash, "file")}
+          title={fileAvailable
+            ? "Save file"
+            : fileFailed
+              ? "Transfer failed — retry"
+              : fileDeferred
+                ? "Download anyway"
+                : "Downloading file"}
         >
           <Paperclip size={20} strokeWidth={2.1} />
           <span class="file-info">
             <strong>{fileAttachment.name}</strong>
             <small>
               {formatFileSize(fileAttachment.sizeBytes)}
-              {fileAvailable
-                ? ""
-                : fileDeferred
-                  ? ($settings?.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024) === 0
-                    ? " · automatic downloads are set to Always ask"
-                    : ` · above your ${formatFileSize($settings?.automaticFileDownloadLimitBytes)} automatic download limit`
-                  : " · downloading…"}
+              {#if fileDeferred}
+                {($settings?.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024) === 0
+                  ? " · automatic downloads are set to Always ask"
+                  : ` · above your ${formatFileSize($settings?.automaticFileDownloadLimitBytes)} automatic download limit`}
+              {/if}
             </small>
           </span>
           {#if fileDeferred}
             <span class="tiny">Download anyway</span>
+          {:else if fileFailed}
+            <span class="tiny">Retry</span>
           {:else}
             <Download size={17} strokeWidth={2.1} />
           {/if}
         </button>
+        {#if fileHash && !fileAvailable && !fileDeferred}
+          <!-- Outside the card on purpose: the card is a <button> and is disabled
+               while a transfer is in flight, which makes its whole subtree inert —
+               a cancel button nested in there can never receive a click (and a
+               button inside a button is invalid markup besides). -->
+          <div class="row muted tiny file-transfer">
+            <TransferStatus
+              hash={fileHash}
+              mediaType="file"
+              idleText={mediaEvicted ? "removed from this device" : "downloading…"}
+            />
+            {#if mediaEvicted}
+              <button
+                type="button"
+                class="fetch-anyway"
+                disabled={fileManuallyRequested}
+                onclick={() => void requestBlobAnyway(fileHash, "file")}
+              >{fileManuallyRequested ? "Requested…" : "Download again"}</button>
+            {/if}
+          </div>
+        {/if}
       {:else}
         <div class="row muted tiny"><Paperclip size={14} /><span>File</span></div>
       {/if}
@@ -728,6 +902,7 @@
       <div class="edit">
         <textarea
           class="edit-input"
+          bind:this={editTextarea}
           bind:value={editText}
           onkeydown={onEditKey}
           rows="2"
@@ -864,7 +1039,7 @@
     onclick={closeCtx}
     oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }}
   ></button>
-  <div class="ctx-menu" role="menu" style={`left:${ctx.x}px; top:${ctx.y}px;`}>
+  <div class="ctx-menu" role="menu" bind:this={ctxMenuEl} style={`left:${ctx.x}px; top:${ctx.y}px;`}>
     <button
       type="button"
       disabled={busy}
@@ -876,6 +1051,14 @@
         disabled={busy}
         onclick={() => { closeCtx(); void copyMessage(); }}
       >Copy</button>
+    {/if}
+    {#if localMedia}
+      <button
+        type="button"
+        disabled={busy}
+        title="Keeps the message; removes only this device's copy of the file"
+        onclick={() => { closeCtx(); void removeDownload(); }}
+      >Remove download</button>
     {/if}
     {#if message.type === "TEXT"}
       <button
@@ -1128,6 +1311,7 @@
   .file-info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 1px; }
   .file-info strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-info small { opacity: .72; }
+  .file-transfer { margin-top: .3rem; gap: .4rem; }
   .voice-player {
     display: flex;
     align-items: center;
@@ -1454,6 +1638,18 @@
   .tags { margin-top: .35rem; flex-wrap: wrap; }
   .bubble.compact .tags { margin-top: .2rem; }
   .image-placeholder { font-style: italic; }
+  .fetch-anyway {
+    padding: .1rem .4rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text);
+    font: inherit;
+    font-size: .72rem;
+    font-style: normal;
+  }
+  .fetch-anyway:hover:not(:disabled) { background: var(--surface-hover); filter: none; }
+  .fetch-anyway:disabled { opacity: .55; }
   .indicator {
     display: inline-flex;
     align-items: center;

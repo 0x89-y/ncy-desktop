@@ -1,15 +1,62 @@
 # Changelog
 
-## 0.7.3 — 2026-07-24
+## 0.7.3 — 2026-07-27
+
+### Added
+
+- Added transfer progress for incoming media, showing the percentage and bytes received
+  with a button to stop a download.
+- Added per-message removal of downloaded media that keeps the message: the file leaves
+  this device only, is never fetched back automatically, and can be downloaded again at
+  any time.
+- Added a media storage panel under Backup that reports how much space downloads use and
+  reclaims files no message refers to any more; the same cleanup now runs automatically
+  after messages are deleted.
+- Added optional per-chat automatic deletion of messages older than a chosen age. The rule
+  travels with the chat, so every paired device applies it; starred messages and ones with
+  an upcoming reminder are always kept.
+- Added a "Force full resync" action under Sync that asks paired devices to send their
+  whole history again, for a device that is missing messages or still showing ones
+  deleted elsewhere.
 
 ### Changed
+
+- Deleting a message now removes its text from this device's records rather than only
+  hiding it. Messages deleted before this update are cleaned up on the next launch.
 
 - Refined Sync settings with contextual connection descriptions, a compact custom
   file-download limit, and device identity under General.
 - Pairing invitations now use temporary random labels until authentication supplies the
   device name.
+- New chats can now use the Default profile, an existing profile, or create a new
+  synchronized profile.
 - Removed QR and JSON credentials from paired-device views and restricted invitation-code
   replacement to unused invitations.
+- Moved search and filtering into the compact sidebar header and added a pinned-chat filter.
+- Made message links open safely in the system browser, kept message menus inside the
+  viewport, retained composer focus after sending, and added Up Arrow editing.
+- Added active-filter counts and reset, keyboard shortcuts, highlighted keyboard search,
+  per-chat drafts, unsaved-edit protection, and new-message navigation.
+- Reorganized General, Sync, and Interface into clearer sections with immediate saving,
+  compact technical disclosures, and simplified reaction and connection controls.
+
+### Fixed
+
+- Fixed voice messages longer than about three seconds, and files of any appreciable size,
+  failing to transfer over Pear.
+- Fixed files larger than roughly nine megabytes ending the sync session on a local
+  network instead of transferring.
+- Fixed a media transfer that failed once never being retried, leaving the message showing
+  "not on this device" until it was deleted.
+- Fixed a large transfer stalling every other message on the same connection until it
+  finished.
+- Fixed links in received messages being opened without checking their address first.
+- Fixed a removed download reverting to "Downloading…" after a restart, and voice
+  messages and images offering no way to fetch them back once removed.
+- Fixed images and voice messages reporting that the other device no longer had a file
+  it was still holding, because every manual download asked for it as a file attachment.
+- Fixed a removed voice message closing the app when played, and a missing image
+  rendering as an empty gap with nothing to say a picture belonged there.
 
 ## 0.7.2 — 2026-07-24
 

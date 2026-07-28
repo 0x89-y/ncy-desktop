@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { requestConfirmation } from "../stores/confirm";
   import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { api, type PairAttempt, type PairingDescriptor } from "../ipc";
   import {
@@ -8,23 +9,12 @@
     refreshPeers,
     connectedPeers,
     peerErrors,
-    lanIps,
-    advertisedHost,
-    refreshLanIps,
-    serverAddr,
   } from "../stores/app";
   import { formatFullTime } from "../format";
   import { X } from "@lucide/svelte";
   import { onMount } from "svelte";
 
-  let {
-    discoverable,
-    onDiscoverableChange,
-    connectionMode,
-  }: {
-    discoverable: boolean;
-    onDiscoverableChange: (value: boolean) => void;
-    connectionMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
+  let { connectionMode }: { connectionMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
   } = $props();
 
   function connectedLabel(): string {
@@ -35,7 +25,6 @@
 
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
-  let showConnectionDetails = $state(false);
   let showManualPairing = $state(false);
   let showRecentRequests = $state(false);
   const duplicateDeviceNames = $derived.by(() => {
@@ -80,14 +69,14 @@
   }
 
   async function remove(id: string) {
-    if (!confirm("Revoke and remove this pairing? The affected device will disconnect and must pair again. Chats remain unchanged.")) return;
+    if (!await requestConfirmation("The affected device will disconnect and must pair again. Chats remain unchanged.", { title: "Remove paired device", confirmLabel: "Remove", dangerous: true })) return;
     await api.deletePairing(id);
     await refreshPairings();
   }
 
   async function replaceInvitation(pairing: PairingDescriptor["pairing"]) {
     if (pairing.phoneId) return;
-    if (!confirm("Replace this unused invitation? Any previously copied QR/JSON will stop working.")) return;
+    if (!await requestConfirmation("Any previously copied QR or JSON will stop working.", { title: "Replace invitation", confirmLabel: "Replace", dangerous: true })) return;
     await api.replacePairing(pairing.id);
     await refreshPairings();
   }
@@ -105,15 +94,6 @@
     }, 60_000);
   }
 
-  async function pickHost(ip: string) {
-    await api.setAdvertisedHost(ip);
-    await refreshLanIps();
-    await refreshPairings();
-  }
-
-  async function refreshIps() {
-    await refreshLanIps();
-  }
 
   // --- Add another desktop as an outbound sync peer. ---
   let peerJson = $state("");
@@ -142,7 +122,7 @@
   }
 
   async function removePeer(id: string) {
-    if (!confirm("Stop syncing with this desktop?")) return;
+    if (!await requestConfirmation("Stop syncing with this desktop?", { title: "Remove desktop", confirmLabel: "Remove", dangerous: true })) return;
     await api.deletePeer(id);
     await refreshPeers();
   }
@@ -198,7 +178,7 @@
 
 <div class="devices">
   <section class="group">
-    <h2>Add or share device</h2>
+    <div class="subsection-title">Add or share device</div>
     <div class="opt-list">
       <div class="field">
         <span class="field-label">Share this desktop</span>
@@ -206,9 +186,6 @@
           <button onclick={create} disabled={busy}>{busy ? "Creating..." : "Create pairing code"}</button>
           <button type="button" class="ghost" onclick={() => (showManualPairing = !showManualPairing)}>
             {showManualPairing ? "Hide manual" : "Manual"}
-          </button>
-          <button type="button" class="ghost" onclick={() => (showConnectionDetails = !showConnectionDetails)}>
-            {showConnectionDetails ? "Hide network" : "Network"}
           </button>
         </div>
         {#if showManualPairing}
@@ -233,62 +210,13 @@
             </div>
           </div>
         {/if}
-        {#if showConnectionDetails}
-          <div class="network-details">
-            <p class="tiny muted network-note">
-              Public and guest Wi-Fi may isolate devices or block multicast discovery even when
-              both show the same network name. Ncy does not scan the subnet; use a private LAN or
-              hotspot if paired devices remain offline.
-            </p>
-            <label class="opt-row embedded-row">
-              <span class="opt-label">
-                Discoverable on local network
-                <span class="inline-hint">
-                  {discoverable
-                    ? "On with a private ID label — paired devices can find this desktop again after its IP address changes."
-                    : "Off — QR/JSON pairing still works, but automatic recovery after an IP address change does not."}
-                </span>
-              </span>
-              <span class="switch">
-                <input
-                  type="checkbox"
-                  checked={discoverable}
-                  onchange={(e) => onDiscoverableChange((e.currentTarget as HTMLInputElement).checked)}
-                />
-                <span class="slider"></span>
-              </span>
-            </label>
-            {#if !discoverable}
-              <p class="tiny danger network-note">
-                If this desktop's LAN address changes, paired devices keep trying the old address
-                until discovery is enabled again or their pairing endpoint is updated manually.
-              </p>
-            {/if}
-            <div class="field">
-              <span class="field-label">Sync address</span>
-              {#if $serverAddr}
-                <span class="muted tiny">{$serverAddr}</span>
-              {/if}
-              <div class="row ip-row">
-                {#each $lanIps as ip (ip)}
-                  <button
-                    class="chip"
-                    class:active={$advertisedHost === ip}
-                    onclick={() => pickHost(ip)}
-                  >{ip}</button>
-                {/each}
-                <button class="ghost" onclick={refreshIps}>Refresh IPs</button>
-              </div>
-            </div>
-          </div>
-        {/if}
       </div>
     </div>
   </section>
 
   {#if $pairings.length || $peers.length}
   <section class="group">
-    <h2>Paired devices</h2>
+    <div class="subsection-title">Paired devices</div>
     <div class="col list">
         {#each $pairings as p (p.pairing.id)}
           {@const claimed = p.pairing.phoneId !== null}
@@ -430,7 +358,7 @@
 
   {#if pairAttempts.length}
   <section class="group">
-    <h2>Recent requests</h2>
+    <div class="subsection-title">Recent requests</div>
     <div class="opt-list">
       <div class="opt-row">
         <span class="opt-label">
@@ -470,70 +398,22 @@
 </div>
 
 <style>
-  /* Full-width divider separating the device settings above from the pairing
-     area (this component) below. */
   .devices {
     border-top: 1px solid var(--border);
-    padding-top: 1.25rem;
+    padding-top: .75rem;
   }
   .form { gap: .5rem; }
   .form .ghost {
     flex-shrink: 0;
   }
-  .manual-pairing,
-  .network-details {
-    display: flex;
-    flex-direction: column;
-    gap: .5rem;
-    margin-top: .5rem;
-  }
-  .network-details {
-    padding-top: .5rem;
-    border-top: 1px solid var(--border);
-  }
-  .embedded-row {
-    padding: 0;
-    border-top: none;
-  }
+  .manual-pairing { display:flex; flex-direction:column; gap:.5rem; margin-top:.5rem; }
   .compact-btn {
     padding: .42rem .7rem;
     min-width: 4.75rem;
     flex-shrink: 0;
     font-size: .85rem;
   }
-  .ip-row {
-    flex-wrap: wrap;
-    gap: .4rem;
-  }
-  .switch {
-    position: relative;
-    display: inline-block;
-    width: 40px;
-    height: 22px;
-    flex-shrink: 0;
-  }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .slider {
-    position: absolute;
-    inset: 0;
-    cursor: pointer;
-    background: var(--border-strong);
-    border-radius: var(--radius-pill);
-    transition: background .15s;
-  }
-  .slider::before {
-    content: "";
-    position: absolute;
-    height: 16px;
-    width: 16px;
-    left: 3px;
-    top: 3px;
-    background: #fff;
-    border-radius: 50%;
-    transition: transform .15s;
-  }
-  .switch input:checked + .slider { background: var(--accent); }
-  .switch input:checked + .slider::before { transform: translateX(18px); }
+  .subsection-title { padding: .45rem var(--settings-pad); color: var(--text-muted); font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   .inline-empty {
     margin: 0;
     padding: .75rem var(--settings-pad);

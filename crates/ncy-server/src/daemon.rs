@@ -413,6 +413,7 @@ async fn console_loop(
                         .send(ncy_core::sync::ManualBlobRequest {
                             hash: argument.to_owned(),
                             media_type: "file".to_owned(),
+                            cancel: false,
                         })
                         .map(|_| ())
                         .map_err(|_| anyhow::anyhow!("no connected device can provide the file"))

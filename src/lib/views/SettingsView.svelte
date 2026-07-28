@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { api, type AppSettings, type DesktopPrefs, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
+  import { api, type AppSettings, type BlobGcReport, type DesktopPrefs, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
+  import { formatFileSize } from "../format";
   import {
     settings,
     refreshSettings,
@@ -15,11 +16,15 @@
     setQuickReactions,
     serverStatus,
     serverAddr,
+    lanIps,
+    advertisedHost,
+    refreshLanIps,
     REACTION_CHOICES,
     DEFAULT_QUICK_REACTIONS,
     type SettingsTab,
   } from "../stores/app";
   import { save as saveDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { writeText } from "@tauri-apps/plugin-clipboard-manager";
   import { getVersion } from "@tauri-apps/api/app";
   import {
     updaterPhase,
@@ -29,10 +34,11 @@
     installUpdate,
   } from "../stores/updater";
   import { CHANGELOG } from "../changelog";
-  import { Monitor, Sun, Moon, ArrowLeft, Save, Download, Upload } from "@lucide/svelte";
+  import { Monitor, Sun, Moon, ArrowLeft, ChevronDown, ChevronRight, Copy, Download, Upload } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import DevicesPane from "../components/DevicesPane.svelte";
+  import { requestConfirmation, showNotice } from "../stores/confirm";
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: "general", label: "General" },
@@ -82,17 +88,19 @@
   let showGeneralAdvanced = $state(false);
   let showSyncAdvanced = $state(false);
   let showTranscriptionAdvanced = $state(false);
+  let showReactionPicker = $state(false);
+  let copiedDeviceId = $state(false);
 
   // Mirrors the titlebar dot, spelled out. "starting" is the brief window
   // between flipping the toggle on and the listener binding its port.
   const serverStatusLabel = $derived(
     $serverStatus === "running"
-      ? `Listening on ${$serverAddr || "…"}`
+      ? "Ready"
       : $serverStatus === "error"
-        ? "Failed to start — is the port already in use?"
+        ? "Could not start"
         : $serverStatus === "starting"
           ? "Starting…"
-          : "Not running",
+          : "Off",
   );
   let dirty = $state(false);
 
@@ -106,10 +114,24 @@
   const libExt = isMac ? ".dylib" : isLinux ? ".so" : ".dll";
   const ffmpegFileName = isMac || isLinux ? "ffmpeg" : "ffmpeg.exe";
 
+  /** The last `$settings` we mirrored into the fields below. Every save round-trips
+   *  through `refreshSettings()`, so without this the effect would re-run on an
+   *  unrelated toggle and stomp whatever the user is currently typing. Free-text
+   *  fields are therefore only adopted when the *stored* value actually moved —
+   *  i.e. the change came from elsewhere, not from our own save. */
+  let syncedSettings: AppSettings | null = null;
+
   $effect(() => {
     if ($settings) {
-      port = $settings.port;
-      deviceName = $settings.deviceName;
+      const editable = syncedSettings;
+      if (!editable || editable.port !== $settings.port) {
+        port = $settings.port;
+        dirty = false;
+      }
+      if (!editable || editable.deviceName !== $settings.deviceName) {
+        deviceName = $settings.deviceName;
+      }
+      syncedSettings = $settings;
       theme = $settings.theme as "system" | "light" | "dark";
       accent = $settings.accent ?? "purple";
       discoverable = $settings.discoverable;
@@ -122,9 +144,25 @@
         .includes(String(automaticFileDownloadLimitBytes))
           ? String(automaticFileDownloadLimitBytes)
           : "custom";
-      dirty = false;
     }
   });
+
+  async function applyDiscoverable(value: boolean) {
+    const previous = discoverable;
+    discoverable = value;
+    try {
+      await persistSettings({ discoverable: value });
+      await refreshLanIps();
+    } catch {
+      discoverable = previous;
+    }
+  }
+
+  async function pickAdvertisedHost(ip: string) {
+    await api.setAdvertisedHost(ip);
+    await refreshLanIps();
+    await refreshPairings();
+  }
 
   function markDirty() {
     dirty = true;
@@ -143,52 +181,47 @@
     };
   }
 
-  async function changeTransportMode(event: Event) {
-    const select = event.currentTarget as HTMLSelectElement;
-    const next = select.value as AppSettings["syncTransportMode"];
+  async function applyTransportMode(next: AppSettings["syncTransportMode"]) {
+    if (next === syncTransportMode) return;
     if (next !== "localOnly" && syncTransportMode === "localOnly") {
-      const accepted = confirm(
+      const accepted = await requestConfirmation(
         "Enable Pear networking? Ncy will start a bundled peer-to-peer networking process and contact the Pear/Holepunch discovery infrastructure so your paired devices can connect over the internet. Chat contents remain end-to-end protected by Ncy's existing pairing credentials.",
       );
-      if (!accepted) {
-        select.value = syncTransportMode;
-        return;
-      }
+      if (!accepted) return;
     }
     syncTransportMode = next;
     markDirty();
     try {
-      await persistSettings();
-      dirty = false;
+      await persistSettings({ syncTransportMode: next });
     } catch (error) {
-      // The backend persists the requested policy before attempting to start
-      // Pear, so reload that durable choice and expose the startup failure.
       await refreshSettings();
       const message = typeof error === "string"
         ? error
         : error instanceof Error
           ? error.message
           : "unknown error";
-      alert(`The connection method was saved, but Pear could not start: ${message}`);
+      await showNotice(`The connection method was saved, but Pear could not start: ${message}`, {
+        title: "Pear could not start",
+        dangerous: true,
+      });
     }
   }
 
-  async function persistSettings() {
-    await api.updateSettings(settingsPayload());
-    await Promise.all([refreshSettings(), refreshPairings()]);
+  async function persistSettings(changes: Partial<AppSettings>) {
+    const current = $settings ?? settingsPayload();
+    await api.updateSettings({ ...current, ...changes });
+    await refreshSettings();
   }
 
-  // Theme + accent both live-apply so the picker feels immediate. The Save
-  // button still writes them to disk along with everything else dirty.
+  // Theme and accent apply and persist immediately.
   async function applyThemeNow(value: "system" | "light" | "dark") {
     if (theme === value) return;
     theme = value;
     markDirty();
     try {
-      await persistSettings();
-      dirty = false;
+      await persistSettings({ theme: value });
     } catch {
-      /* leave dirty so user can retry via Save */
+      theme = $settings?.theme as typeof theme ?? "system";
     }
   }
   async function applyAccentNow(value: string) {
@@ -196,10 +229,9 @@
     accent = value;
     markDirty();
     try {
-      await persistSettings();
-      dirty = false;
+      await persistSettings({ accent: value });
     } catch {
-      /* leave dirty so user can retry via Save */
+      accent = $settings?.accent ?? "purple";
     }
   }
 
@@ -224,7 +256,7 @@
     if (transcriptionEnabled === v) return;
     transcriptionEnabled = v;
     try {
-      await persistSettings();
+      await persistSettings({ transcriptionEnabled: v });
     } catch {
       /* revert on failure */
       transcriptionEnabled = !v;
@@ -249,7 +281,7 @@
   }
   async function deleteWhisperModel() {
     if (whisperBusy) return;
-    if (!confirm("Delete the whisper model file? You'll have to re-download to transcribe again.")) return;
+    if (!await requestConfirmation("You will have to download this model again to use it.", { title: "Delete speech model", confirmLabel: "Delete", dangerous: true })) return;
     whisperBusy = true;
     try {
       await api.transcriptionDeleteModel();
@@ -344,19 +376,95 @@
     }
   }
 
-  async function save() {
+  async function copyDeviceId() {
+    if (!$identity?.deviceId) return;
+    await writeText($identity.deviceId);
+    copiedDeviceId = true;
+    setTimeout(() => copiedDeviceId = false, 1200);
+  }
+
+  async function saveDeviceName() {
     if (saving) return;
     saving = true;
     try {
-      await persistSettings();
+      await persistSettings({ deviceName });
       await refreshIdentity();
     } finally {
       saving = false;
     }
   }
 
+  async function applyPort() {
+    if (saving || !dirty) return;
+    saving = true;
+    try {
+      await persistSettings({ port });
+      dirty = false;
+    } finally {
+      saving = false;
+    }
+  }
+
+  // --- Force a full replay to every paired device. ---
+  // The outbound watermark can end up ahead of what a device actually stored, and
+  // everything under it then becomes unreachable — a deletion stranded that way
+  // never arrives, while a manual sync truthfully reports nothing to send.
+  let resyncing = $state(false);
+  let resyncNote = $state("Re-send the whole history to every device. Use if a device is missing messages or still shows ones you deleted.");
+  async function forceResync() {
+    if (resyncing) return;
+    resyncing = true;
+    try {
+      const cleared = await api.forceFullResync();
+      resyncNote = cleared > 0
+        ? `Cleared ${cleared} sync marker${cleared === 1 ? "" : "s"}. Each device replays on its next connection.`
+        : "Nothing to clear — no device has recorded sync progress yet.";
+    } catch (e) {
+      resyncNote = `Could not clear sync markers: ${e}`;
+    } finally {
+      resyncing = false;
+    }
+  }
+
   // --- Backup / restore (this desktop's own notes). ---
   let backupBusy = $state(false);
+
+  // --- Media storage ---
+  // The blob store is content-addressed and append-only, so deleting a message never
+  // removed its attachment. Scan first and show what would go before removing it.
+  let storageReport = $state<BlobGcReport | null>(null);
+  let storageBusy = $state(false);
+  let storageError = $state<string | null>(null);
+
+  async function runStorageScan(dryRun: boolean) {
+    if (storageBusy) return;
+    storageBusy = true;
+    storageError = null;
+    try {
+      storageReport = await api.collectUnusedBlobs(dryRun);
+    } catch (e: any) {
+      storageError = typeof e === "string" ? e : (e?.message ?? "storage scan failed");
+    } finally {
+      storageBusy = false;
+    }
+  }
+
+  const measureStorage = () => runStorageScan(true);
+
+  async function cleanUpStorage() {
+    const freeing = formatFileSize(storageReport?.reclaimedBytes ?? 0);
+    if (
+      !(await requestConfirmation(
+        `Delete ${freeing} of media that no message refers to any more? This cannot be undone, though anything still on a paired device can be downloaded again.`,
+        { title: "Free up space", confirmLabel: "Delete", dangerous: true },
+      ))
+    ) {
+      return;
+    }
+    await runStorageScan(false);
+    // Re-measure so the panel reflects the store as it now stands.
+    if (!storageError) await runStorageScan(true);
+  }
   let backupMsg = $state<string | null>(null);
 
   async function doExport() {
@@ -403,7 +511,7 @@
     }
     const path = Array.isArray(src) ? src[0] : src;
     if (!path) return;
-    if (!confirm("Import this backup? Ncy will merge any new events and media into your local chats.")) return;
+    if (!await requestConfirmation("Ncy will merge new events and media into your local chats.", { title: "Import backup", confirmLabel: "Import" })) return;
     backupBusy = true;
     try {
       const r = await api.importBackup(path);
@@ -430,7 +538,7 @@
     const sizes = { tiny: "75 MiB", base: "142 MiB", small: "466 MiB" };
     const quality = modelId.split(".")[0] as "tiny" | "base" | "small";
     const cached = whisperStatus?.cachedModelIds.includes(modelId) ?? false;
-    if (!cached && !confirm(`Download ${modelId} (~${sizes[quality]}) and use it for transcription?`)) return;
+    if (!cached && !await requestConfirmation(`Download ${modelId} (~${sizes[quality]}) and use it for transcription?`, { title: "Download speech model", confirmLabel: "Download" })) return;
     whisperBusy = true;
     whisperError = null;
     downloadStage = "model";
@@ -450,7 +558,7 @@
   async function removeUnusedWhisperModels() {
     const bytes = whisperStatus?.unusedModelBytes ?? 0;
     if (!bytes || whisperBusy) return;
-    if (!confirm(`Remove unused speech models and recover ${fmtMB(bytes)}? The active model will be kept.`)) return;
+    if (!await requestConfirmation(`Remove unused speech models and recover ${fmtMB(bytes)}? The active model will be kept.`, { title: "Remove unused models", confirmLabel: "Remove", dangerous: true })) return;
     whisperBusy = true;
     whisperError = null;
     try {
@@ -483,9 +591,10 @@
   }
 
   async function purgeTombstones() {
-    if (!confirm(
+    if (!await requestConfirmation(
       "Only continue if every old device and backup containing deleted chats or messages is gone. " +
-      "Stale history paired later can restore them. This cannot be undone."
+      "Stale history paired later can restore them. This cannot be undone.",
+      { title: "Forget deletion records", confirmLabel: "Forget", dangerous: true },
     )) return;
     const removed = await api.purgeChatTombstones();
     backupMsg = `Forgot ${removed} deletion record${removed === 1 ? "" : "s"}.`;
@@ -510,310 +619,171 @@
      {/each}
    </nav>
 
-   {#if dirty || saving}
-     <button class="save-btn" onclick={save} disabled={saving} title="Save changes"><Save size={16} strokeWidth={2.25} /><span>{saving ? "Saving…" : "Save"}</span></button>
-   {/if}
 
    <div class="panes">
   {#if $settingsTab === "general"}
   <section class="group">
-    <h2>General</h2>
-    <div class="opt-list">
-      <label class="field">
-        <span class="field-label">Device name</span>
-        <div class="row device-name-row">
-          <input type="text" bind:value={deviceName} oninput={markDirty} />
-          <button type="button" class="ghost" onclick={() => showGeneralAdvanced = !showGeneralAdvanced}>
-            {showGeneralAdvanced ? "Hide advanced" : "Advanced"}
-          </button>
-        </div>
-      </label>
-      {#if showGeneralAdvanced && $identity}
-        <div class="opt-row">
-          <span class="opt-label">Device ID</span>
-          <code class="id">{$identity.deviceId}</code>
-        </div>
-      {/if}
-      <label class="opt-row">
-        <span class="opt-label">Start minimized</span>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={desktopPrefs.startMinimized}
-            onchange={(e) => updateDesktopPref("startMinimized", (e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
-      <label class="opt-row">
-        <span class="opt-label">
-          Close to tray
-          <span class="inline-hint">Closing the window hides Ncy instead of quitting it.</span>
-        </span>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={desktopPrefs.closeToTray}
-            onchange={(e) => updateDesktopPref("closeToTray", (e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
-      {#if !desktopPrefs.closeToTray}
-        <label class="opt-row">
-          <span class="opt-label">
-            Ask when closing
-            <span class="inline-hint">Offer to minimize to the tray instead of quitting.</span>
-          </span>
-          <span class="switch">
-            <input
-              type="checkbox"
-              checked={desktopPrefs.askCloseToTray}
-              onchange={(e) => updateDesktopPref("askCloseToTray", (e.currentTarget as HTMLInputElement).checked)}
-            />
-            <span class="slider"></span>
-          </span>
+    <div class="settings-subsection">
+      <div class="subsection-title">Device</div>
+      <div class="opt-list">
+        <label class="field">
+          <span class="field-label">Device name</span>
+          <input type="text" bind:value={deviceName} onchange={saveDeviceName} />
         </label>
-      {/if}
-      <label class="opt-row">
-        <span class="opt-label">Launch on startup</span>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={desktopPrefs.launchOnStartup}
-            onchange={(e) => updateDesktopPref("launchOnStartup", (e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
-      <label class="opt-row">
-        <span class="opt-label">Confirm before deleting</span>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={desktopPrefs.askBeforeDeleting}
-            onchange={(e) => updateDesktopPref("askBeforeDeleting", (e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
-      {#if desktopPrefsError}
-        <div class="field">
-          <span class="tiny" style="color:var(--danger);">{desktopPrefsError}</span>
-        </div>
-      {/if}
+        <button type="button" class="disclosure-row" onclick={() => showGeneralAdvanced = !showGeneralAdvanced}>
+          <span>
+            <strong>Installation details</strong>
+            <small class="inline-hint">Technical identity for this installation.</small>
+          </span>
+          {#if showGeneralAdvanced}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
+        </button>
+        {#if showGeneralAdvanced && $identity}
+          <div class="opt-row nested-row">
+            <span class="opt-label">Device ID<span class="inline-hint mono">{showGeneralAdvanced ? $identity.deviceId : `${$identity.deviceId.slice(0, 8)}…`}</span></span>
+            <button type="button" class="ghost compact-btn" onclick={copyDeviceId}><Copy size={14} /> {copiedDeviceId ? "Copied" : "Copy"}</button>
+          </div>
+        {/if}
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">App behavior</div>
+      <div class="opt-list">
+        <label class="opt-row"><span class="opt-label">Launch on startup</span><span class="switch"><input type="checkbox" checked={desktopPrefs.launchOnStartup} onchange={(e) => updateDesktopPref("launchOnStartup", e.currentTarget.checked)} /><span class="slider"></span></span></label>
+        <label class="opt-row"><span class="opt-label">Start minimized</span><span class="switch"><input type="checkbox" checked={desktopPrefs.startMinimized} onchange={(e) => updateDesktopPref("startMinimized", e.currentTarget.checked)} /><span class="slider"></span></span></label>
+        <label class="opt-row"><span class="opt-label">Close to tray<span class="inline-hint">Closing the window keeps Ncy running in the tray.</span></span><span class="switch"><input type="checkbox" checked={desktopPrefs.closeToTray} onchange={(e) => updateDesktopPref("closeToTray", e.currentTarget.checked)} /><span class="slider"></span></span></label>
+        {#if !desktopPrefs.closeToTray}
+          <label class="opt-row nested-row"><span class="opt-label">Ask when closing<span class="inline-hint">Offer the tray before quitting.</span></span><span class="switch"><input type="checkbox" checked={desktopPrefs.askCloseToTray} onchange={(e) => updateDesktopPref("askCloseToTray", e.currentTarget.checked)} /><span class="slider"></span></span></label>
+        {/if}
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Safety</div>
+      <div class="opt-list">
+        <label class="opt-row"><span class="opt-label">Confirm before deleting</span><span class="switch"><input type="checkbox" checked={desktopPrefs.askBeforeDeleting} onchange={(e) => updateDesktopPref("askBeforeDeleting", e.currentTarget.checked)} /><span class="slider"></span></span></label>
+        {#if desktopPrefsError}<div class="field"><span class="tiny" style="color:var(--danger);">{desktopPrefsError}</span></div>{/if}
+      </div>
     </div>
   </section>
   {:else if $settingsTab === "sync"}
   <section class="group">
-    <h2>Paired-device connections</h2>
-    <div class="opt-list">
-      <label class="opt-row">
-        <span class="opt-label">
-          Enable paired-device connections
-          <span class="inline-hint">{serverStatusLabel}</span>
-        </span>
-        <span class="switch">
-          <input
-            type="checkbox"
-            checked={desktopPrefs.syncServerEnabled}
-            onchange={(e) => updateDesktopPref("syncServerEnabled", (e.currentTarget as HTMLInputElement).checked)}
-          />
-          <span class="slider"></span>
-        </span>
-      </label>
+    <div class="settings-subsection">
+      <div class="subsection-title">Device synchronization</div>
+      <div class="opt-list">
+        <label class="opt-row">
+          <span class="opt-label">Sync between devices</span>
+          <span class="row status-control"><span class="status-badge" class:success={$serverStatus === "running"} class:error={$serverStatus === "error"}>{serverStatusLabel}</span><span class="switch"><input type="checkbox" checked={desktopPrefs.syncServerEnabled} onchange={(e) => updateDesktopPref("syncServerEnabled", e.currentTarget.checked)} /><span class="slider"></span></span></span>
+        </label>
+        <div class="field">
+          <span class="field-label">Connection mode</span>
+          <div class="mode-tabs" aria-label="Connection mode">
+            <button class:on={syncTransportMode === "localOnly"} onclick={() => applyTransportMode("localOnly")}>Local only</button>
+            <button class:on={syncTransportMode === "pearOnly"} onclick={() => applyTransportMode("pearOnly")}>Pear only</button>
+            <button class:on={syncTransportMode === "localPreferred"} onclick={() => applyTransportMode("localPreferred")}>Local preferred</button>
+            <button class:on={syncTransportMode === "pearPreferred"} onclick={() => applyTransportMode("pearPreferred")}>Pear preferred</button>
+          </div>
+          <span class="tiny muted">{syncTransportMode === "localOnly" ? "Uses your current network only." : syncTransportMode === "pearOnly" ? "Pairs and syncs across networks using Pear." : syncTransportMode === "localPreferred" ? "Uses your current network when available, with Pear across networks." : "Uses Pear when available, with local-network fallback."}</span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- Discovery and the paired-device list are inert without a running server,
-       so they collapse rather than sit there disabled. -->
-  {#if desktopPrefs.syncServerEnabled}
-    <DevicesPane
-      discoverable={discoverable}
-      connectionMode={syncTransportMode}
-      onDiscoverableChange={(value) => {
-        discoverable = value;
-        markDirty();
-      }}
-    />
-  {/if}
+  <div class:sync-disabled={!desktopPrefs.syncServerEnabled}>
+    <DevicesPane connectionMode={syncTransportMode} />
+  </div>
+
   <section class="group">
-    <h2>Sync settings</h2>
-    <div class="opt-list">
-      <label class="field">
-        <span class="field-label">Connection mode</span>
-        <select value={syncTransportMode} onchange={changeTransportMode}>
-          <option value="localOnly">Local only</option>
-          <option value="pearOnly">Pear only</option>
-          <option value="localPreferred">Local preferred</option>
-          <option value="pearPreferred">Pear preferred</option>
-        </select>
-        <span class="tiny muted">
-          {syncTransportMode === "localOnly"
-            ? "Uses your current network only."
-            : syncTransportMode === "pearOnly"
-              ? "Pairs and syncs across networks using Pear."
-              : syncTransportMode === "localPreferred"
-                ? "Uses your current network when available, with Pear across networks."
-                : "Uses Pear when available, with local-network fallback."}
-        </span>
-      </label>
-      <label class="field">
-        <span class="field-label">Automatic file downloads</span>
-        <select
-          value={automaticFileDownloadMode}
-          onchange={(event) => {
-            const value = (event.currentTarget as HTMLSelectElement).value;
-            automaticFileDownloadMode = value;
-            if (value !== "custom") automaticFileDownloadLimitBytes = Number(value);
-            markDirty();
-          }}
-        >
-          <option value="0">Always ask</option>
-          <option value={String(25 * 1024 * 1024)}>25 MB</option>
-          <option value={String(100 * 1024 * 1024)}>100 MB</option>
-          <option value={String(250 * 1024 * 1024)}>250 MB</option>
-          <option value={String(500 * 1024 * 1024)}>500 MB</option>
-          <option value={String(1024 * 1024 * 1024)}>1 GB</option>
-          <option value="custom">Custom…</option>
-        </select>
-        {#if automaticFileDownloadMode === "custom"}
-          <input
-            type="number"
-            min="1"
-            max="1024"
-            step="1"
-            value={Math.max(1, Math.round(automaticFileDownloadLimitBytes / (1024 * 1024)))}
-            aria-label="Custom automatic file download limit in megabytes"
-            oninput={(event) => {
-              const mib = Math.max(1, Math.min(1024, Number((event.currentTarget as HTMLInputElement).value) || 1));
-              automaticFileDownloadLimitBytes = mib * 1024 * 1024;
-              markDirty();
-            }}
-          />
-        {/if}
-        <span class="tiny muted">Larger files remain available to download manually.</span>
-      </label>
-      <button type="button" class="ghost advanced-settings-button" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
-        {showSyncAdvanced ? "Hide advanced sync settings" : "Advanced sync settings"}
+    <div class="settings-subsection">
+      <div class="subsection-title">File transfers</div>
+      <div class="opt-list">
+        <label class="field">
+          <span class="field-label">Automatic file downloads</span>
+          <select value={automaticFileDownloadMode} onchange={async (event) => { const value = event.currentTarget.value; automaticFileDownloadMode = value; if (value !== "custom") { automaticFileDownloadLimitBytes = Number(value); await persistSettings({ automaticFileDownloadLimitBytes }); } }}>
+            <option value="0">Always ask</option><option value={String(25 * 1024 * 1024)}>25 MB</option><option value={String(100 * 1024 * 1024)}>100 MB</option><option value={String(250 * 1024 * 1024)}>250 MB</option><option value={String(500 * 1024 * 1024)}>500 MB</option><option value={String(1024 * 1024 * 1024)}>1 GB</option><option value="custom">Custom…</option>
+          </select>
+          {#if automaticFileDownloadMode === "custom"}<input type="number" min="1" max="1024" step="1" value={Math.max(1, Math.round(automaticFileDownloadLimitBytes / (1024 * 1024)))} aria-label="Custom automatic file download limit in megabytes" onchange={async (event) => { const mib = Math.max(1, Math.min(1024, Number(event.currentTarget.value) || 1)); automaticFileDownloadLimitBytes = mib * 1024 * 1024; await persistSettings({ automaticFileDownloadLimitBytes }); }} />{/if}
+          <span class="tiny muted">Larger files remain available to download manually.</span>
+        </label>
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Troubleshooting</div>
+      <div class="opt-list">
+        <div class="opt-row">
+          <span class="opt-label">Replay everything<span class="inline-hint">{resyncNote}</span></span>
+          <button class="ghost" onclick={forceResync} disabled={resyncing}>{resyncing ? "Clearing…" : "Force full resync"}</button>
+        </div>
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <button type="button" class="disclosure-row technical-disclosure" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
+        <span><strong>Technical</strong><small class="inline-hint">Network and port details.</small></span>
+        {#if showSyncAdvanced}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
       </button>
       {#if showSyncAdvanced}
-        <label class="field">
-          <span class="field-label">Sync port · restart to apply</span>
-          <input
-            type="number"
-            min="1"
-            max="65535"
-            bind:value={port}
-            oninput={markDirty}
-          />
-        </label>
-        <div class="opt-row backup-action-row">
-          <span class="opt-label backup-action-label"><span>Forget deletion records</span><span class="inline-hint">Data maintenance: stale devices or backups may restore deleted content afterward.</span></span>
-          <button class="ghost backup-row-button danger" onclick={purgeTombstones}>Forget…</button>
+        <div class="opt-list">
+          <label class="opt-row nested-row">
+            <span class="opt-label">Discoverable on local network<span class="inline-hint">Helps paired devices find this desktop after its address changes.</span></span>
+            <span class="switch"><input type="checkbox" checked={discoverable} onchange={(e) => applyDiscoverable(e.currentTarget.checked)} /><span class="slider"></span></span>
+          </label>
+          <div class="opt-row nested-row">
+            <span class="opt-label">Local sync address<span class="inline-hint">Used for direct connections on this network.</span></span>
+            <span class="muted mono tiny">{$serverAddr || "Not listening"}</span>
+          </div>
+          <div class="field nested-row">
+            <span class="field-label">Advertised address</span>
+            <div class="row ip-row">
+              {#each $lanIps as ip (ip)}
+                <button class="chip" class:active={$advertisedHost === ip} onclick={() => pickAdvertisedHost(ip)}>{ip}</button>
+              {/each}
+              <button class="ghost" onclick={() => refreshLanIps()}>Refresh</button>
+            </div>
+            <span class="tiny muted">Guest Wi-Fi and virtual adapters may block or misroute local discovery.</span>
+          </div>
+          <div class="opt-row nested-row">
+            <label class="opt-label" for="sync-port">Sync port<span class="inline-hint">Restart Ncy after applying.</span></label>
+            <div class="row technical-control"><input id="sync-port" type="number" min="1" max="65535" bind:value={port} oninput={markDirty} /><button onclick={applyPort} disabled={saving || !dirty}>{saving ? "Applying…" : "Apply"}</button></div>
+          </div>
         </div>
       {/if}
     </div>
   </section>
-
   {:else if $settingsTab === "interface"}
   <section class="group">
-    <h2>Interface</h2>
-    <div class="opt-list">
-      <div class="opt-row">
-        <span class="opt-label">Theme</span>
-        <div class="seg">
-          {#each themeModes as m (m.value)}
-            {@const Icon = m.icon}
-            <button
-              type="button"
-              class="seg-btn"
-              class:on={theme === m.value}
-              onclick={() => applyThemeNow(m.value)}
-            >
-              <Icon size={16} />
-              {m.label}
-            </button>
-          {/each}
-        </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Appearance</div>
+      <div class="opt-list">
+        <div class="opt-row"><span class="opt-label">Theme</span><div class="seg">{#each themeModes as m (m.value)}{@const Icon = m.icon}<button type="button" class="seg-btn" class:on={theme === m.value} onclick={() => applyThemeNow(m.value)}><Icon size={16} />{m.label}</button>{/each}</div></div>
+        <div class="opt-row"><span class="opt-label">Accent color</span><div class="accents">{#each accents as a (a.name)}<button type="button" class="swatch" class:on={accent === a.name} style={`--sw:${a.color};`} title={a.label} aria-label={a.label} onclick={() => applyAccentNow(a.name)}></button>{/each}</div></div>
       </div>
-      <div class="opt-row">
-        <span class="opt-label">Accent</span>
-        <div class="accents">
-          {#each accents as a (a.name)}
-            <button
-              type="button"
-              class="swatch"
-              class:on={accent === a.name}
-              style={`--sw:${a.color};`}
-              title={a.label}
-              aria-label={a.label}
-              onclick={() => applyAccentNow(a.name)}
-            ></button>
-          {/each}
-        </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Layout</div>
+      <div class="opt-list">
+        <div class="opt-row"><span class="opt-label">Chat list density</span><div class="seg density-seg"><button class="seg-btn" class:on={$chatListDensity === "comfortable"} onclick={() => chatListDensity.set("comfortable")}>Comfortable</button><button class="seg-btn" class:on={$chatListDensity === "compact"} onclick={() => chatListDensity.set("compact")}>Compact</button></div></div>
+        <div class="opt-row"><span class="opt-label">Message density</span><div class="seg density-seg"><button class="seg-btn" class:on={$messageDensity === "comfortable"} onclick={() => messageDensity.set("comfortable")}>Comfortable</button><button class="seg-btn" class:on={$messageDensity === "compact"} onclick={() => messageDensity.set("compact")}>Compact</button></div></div>
       </div>
-      <div class="opt-row reaction-row">
-        <span class="opt-label">Quick reactions</span>
-        <div class="reaction-settings">
-          <div class="reaction-choice-grid">
-            {#each REACTION_CHOICES as emoji (emoji)}
-              {@const selected = $quickReactions.includes(emoji)}
-              <button
-                type="button"
-                class="reaction-choice"
-                class:on={selected}
-                title={selected ? `Hide ${emoji}` : `Show ${emoji}`}
-                aria-label={selected ? `Hide ${emoji}` : `Show ${emoji}`}
-                onclick={() => toggleQuickReaction(emoji)}
-              >{emoji}</button>
-            {/each}
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Messages</div>
+      <div class="opt-list">
+        <div class="opt-row">
+          <span class="opt-label">Quick reactions<span class="inline-hint">Choose the reactions shown above messages.</span></span>
+          <div class="row reaction-summary">{#each $quickReactions as emoji (emoji)}<span>{emoji}</span>{/each}<button class="ghost compact-btn" onclick={() => showReactionPicker = !showReactionPicker}>{showReactionPicker ? "Done" : "Configure…"}</button></div>
+        </div>
+        {#if showReactionPicker}
+          <div class="reaction-picker">
+            <div class="reaction-choice-grid">{#each REACTION_CHOICES as emoji (emoji)}{@const selected = $quickReactions.includes(emoji)}<button class="reaction-choice" class:on={selected} title={selected ? `Hide ${emoji}` : `Show ${emoji}`} onclick={() => toggleQuickReaction(emoji)}>{emoji}</button>{/each}</div>
+            <button class="subtle reset-reactions" onclick={resetQuickReactions}>Reset to defaults</button>
           </div>
-          <button type="button" class="subtle reset-reactions" onclick={resetQuickReactions}>
-            Reset
-          </button>
-        </div>
-      </div>
-      <div class="opt-row">
-        <span class="opt-label">Message density</span>
-        <div class="seg">
-          <button
-            type="button"
-            class="seg-btn"
-            class:on={$messageDensity === "comfortable"}
-            onclick={() => messageDensity.set("comfortable")}
-          >Comfortable</button>
-          <button
-            type="button"
-            class="seg-btn"
-            class:on={$messageDensity === "compact"}
-            onclick={() => messageDensity.set("compact")}
-          >Compact</button>
-        </div>
-      </div>
-      <div class="opt-row">
-        <span class="opt-label">Chat list density</span>
-        <div class="seg">
-          <button
-            type="button"
-            class="seg-btn"
-            class:on={$chatListDensity === "comfortable"}
-            onclick={() => chatListDensity.set("comfortable")}
-          >Comfortable</button>
-          <button
-            type="button"
-            class="seg-btn"
-            class:on={$chatListDensity === "compact"}
-            onclick={() => chatListDensity.set("compact")}
-          >Compact</button>
-        </div>
+        {/if}
       </div>
     </div>
   </section>
   {:else if $settingsTab === "transcription"}
   <section class="group">
-    <h2>Voice transcription</h2>
-    <div class="opt-list">
+    <div class="settings-subsection">
+      <div class="subsection-title">Transcription</div>
+      <div class="opt-list">
       <label class="opt-row">
         <span class="opt-label">
           Auto-transcribe voice messages
@@ -979,6 +949,7 @@
       {/if}
     </div>
 
+      </div>
     {#if whisperError}
       <div class="panel">
         <span class="tiny" style="color:var(--danger);">{whisperError}</span>
@@ -987,10 +958,53 @@
   </section>
   {:else if $settingsTab === "backup"}
   <section class="group">
-    <h2>Backup</h2>
-    <div class="opt-list">
+    <div class="settings-subsection">
+      <div class="subsection-title">Media storage</div>
+      <div class="opt-list">
+        <div class="opt-row">
+          <span class="opt-label">
+            Downloaded media
+            <span class="inline-hint">
+              {#if storageReport}
+                {formatFileSize(storageReport.totalBytes)} across {storageReport.scanned} files
+                {#if storageReport.deleted > 0} · {formatFileSize(storageReport.reclaimedBytes)} in {storageReport.deleted} unused {storageReport.deleted === 1 ? "file" : "files"}{/if}
+              {:else}
+                Photos, voice messages and attachments kept for the chats that use them.
+              {/if}
+            </span>
+          </span>
+          <button class="ghost backup-row-button" onclick={measureStorage} disabled={storageBusy}>
+            {storageBusy ? "Scanning…" : "Scan"}
+          </button>
+        </div>
+        {#if storageReport && storageReport.lockedChats.length > 0}
+          <div class="field">
+            <span class="tiny" style="color:var(--warning);">
+              {storageReport.lockedChats.length} protected {storageReport.lockedChats.length === 1 ? "chat is" : "chats are"} locked.
+              Their media references are still encrypted, so nothing can be removed until they are unlocked.
+            </span>
+          </div>
+        {:else if storageReport && storageReport.deleted > 0}
+          <div class="opt-row">
+            <span class="opt-label">
+              Free up {formatFileSize(storageReport.reclaimedBytes)}
+              <span class="inline-hint">Media no message refers to any more — usually from deleted messages.</span>
+            </span>
+            <button class="danger backup-row-button" onclick={cleanUpStorage} disabled={storageBusy}>Delete</button>
+          </div>
+        {:else if storageReport}
+          <div class="field"><span class="tiny muted">Nothing to clean up — every stored file is still in use.</span></div>
+        {/if}
+        {#if storageError}
+          <div class="field"><span class="tiny" style="color:var(--danger);">{storageError}</span></div>
+        {/if}
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Automatic backups</div>
+      <div class="opt-list">
       <label class="opt-row">
-        <span class="opt-label"><strong>Automatic backups</strong><span class="inline-hint">Runs while Ncy is open or in the tray.</span></span>
+        <span class="opt-label">Automatic backups<span class="inline-hint">Runs while Ncy is open or in the tray.</span></span>
         <span class="switch">
           <input type="checkbox" checked={desktopPrefs.autoBackupEnabled} onchange={(e) => updateDesktopPref("autoBackupEnabled", e.currentTarget.checked)} />
           <span class="slider"></span>
@@ -1008,10 +1022,15 @@
         {/if}
         <div class="opt-row backup-action-row"><span class="opt-label">{desktopPrefs.lastAutoBackupAt ? `Last backup: ${new Date(desktopPrefs.lastAutoBackupAt).toLocaleString()}` : "No automatic backup yet"}{#if desktopPrefs.lastAutoBackupError}<span class="inline-hint" style="color:var(--danger)">{desktopPrefs.lastAutoBackupError}</span>{/if}</span><button onclick={runAutoBackupNow} disabled={backupBusy || !desktopPrefs.autoBackupFolder}>Back up now</button></div>
       {/if}
-      <div class="opt-row backup-action-row">
-        <span class="opt-label backup-action-label">
-          <span class="backup-action-title">
-            <Download size={18} strokeWidth={2.25} />
+      </div>
+      </div>
+      <div class="settings-subsection">
+        <div class="subsection-title">Manual backup</div>
+        <div class="opt-list">
+          <div class="opt-row backup-action-row">
+            <span class="opt-label backup-action-label">
+              <span class="backup-action-title">
+                <Download size={18} strokeWidth={2.25} />
             Export everything
           </span>
         </span>
@@ -1037,12 +1056,22 @@
         </div>
       {/if}
     </div>
+    </div>
+  </section>
+  <section class="group">
+    <div class="settings-subsection">
+      <div class="subsection-title">Data maintenance</div>
+      <div class="opt-list">
+        <div class="opt-row backup-action-row">
+          <span class="opt-label">Forget deletion records<span class="inline-hint">Old devices or backups may restore deleted content afterward.</span></span>
+          <button class="ghost backup-row-button danger" onclick={purgeTombstones}>Forget…</button>
+        </div>
+      </div>
+    </div>
   </section>
   {:else if $settingsTab === "changelog"}
   <section class="group changelog-view">
-    <div class="changelog-head">
-      <h2>Changelog</h2>
-    </div>
+    <div class="subsection-title changelog-label">Versions</div>
     <div class="seg changelog-series">
       <button class="seg-btn" class:on={changelogSeries === "all"} onclick={() => changelogSeries = "all"}>All</button>
       {#each changelogSeriesOptions as series (series)}<button class="seg-btn" class:on={changelogSeries === series} onclick={() => changelogSeries = series}>{series}.x</button>{/each}
@@ -1055,8 +1084,9 @@
   </section>
   {:else if $settingsTab === "about"}
   <section class="group">
-    <h2>About</h2>
-    <div class="opt-list">
+    <div class="settings-subsection">
+      <div class="subsection-title">Application</div>
+      <div class="opt-list">
       <div class="opt-row">
         <span class="opt-label">Ncy</span>
         <span class="muted mono">v{appVersion || "…"}</span>
@@ -1065,6 +1095,11 @@
         <span class="opt-label">Source</span>
         <a href="https://github.com/0x89-y" target="_blank" rel="noreferrer noopener">github.com/0x89-y</a>
       </div>
+      </div>
+    </div>
+    <div class="settings-subsection">
+      <div class="subsection-title">Legal information</div>
+      <div class="opt-list">
       <div class="opt-row">
         <span class="opt-label">
           Pear open-source components
@@ -1077,12 +1112,14 @@
           <span class="inline-hint">A detailed Apache-2.0, MIT, and ISC dependency inventory and the supplied license and notice texts are installed with the Pear runtime.</span>
         </span>
       </div>
+      </div>
     </div>
   </section>
 
   <section class="group">
-    <h2>Updates</h2>
-    <div class="opt-list">
+    <div class="settings-subsection">
+      <div class="subsection-title">Updates</div>
+      <div class="opt-list">
       <label class="opt-row">
         <span class="opt-label">Check for updates automatically</span>
         <span class="switch">
@@ -1115,6 +1152,7 @@
       {#if $updaterError}
         <span class="muted tiny">{$updaterError}</span>
       {/if}
+    </div>
     </div>
   </section>
 
@@ -1173,22 +1211,6 @@
     padding: .15rem .4rem;
     border-radius: 6px;
     user-select: all;
-  }
-  /* Save action lives top-right in the header, appearing only when there are
-     unsaved changes. */
-  .save-btn {
-    position: absolute;
-    top: .55rem;
-    right: .75rem;
-    z-index: 5;
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: .35rem;
-    padding: .4rem .7rem;
-    font-size: .88rem;
-    font-weight: 600;
-    line-height: 1;
   }
   /* Changelog — each release is a full-width block divided by a hairline, matching
      the edge-to-edge settings rows. */
@@ -1252,16 +1274,6 @@
   .path-id {
     word-break: break-all;
   }
-  .device-name-row {
-    gap: .5rem;
-    flex-wrap: wrap;
-  }
-  .device-name-row input {
-    flex: 1 1 220px;
-  }
-  .device-name-row .ghost {
-    flex-shrink: 0;
-  }
 
   /* Master-detail panel: one bordered frame holding the category rail (left,
      with a divider) and the active category's content (right). */
@@ -1287,8 +1299,6 @@
   .side h1 { font-size:.95rem; font-weight:600; }
   .changelog-series { margin:0 var(--settings-pad) 1rem; max-width:calc(100% - 2 * var(--settings-pad)); overflow-x:auto; }
   .panes:has(.changelog-view) { padding-top:0; }
-  .changelog-head { display:flex; align-items:center; gap:.55rem; padding:.45rem var(--settings-pad); border-bottom:1px solid var(--border); margin-bottom:.55rem; }
-  .changelog-head h2 { margin:0; padding:0; font-size:1rem; font-weight:600; }
   .side-link {
     text-align: left;
     padding: .55rem .7rem;
@@ -1322,7 +1332,59 @@
     overflow-y: auto;
   }
 
-  /* Sliding switch, sized to sit on the right of an `.opt-row`. */
+  .settings-subsection + .settings-subsection { margin-top: 1.15rem; }
+  .subsection-title {
+    padding: 0 var(--settings-pad) .45rem;
+    color: var(--text-muted);
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .disclosure-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+  }
+  .disclosure-row > span { display: flex; flex-direction: column; }
+  .disclosure-row:hover { background: var(--surface-hover); filter: none; }
+  .nested-row { padding-left: calc(var(--settings-pad) + .75rem) !important; background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
+  .status-control { align-items: center; gap: .65rem; }
+  .status-badge { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: .75rem; }
+  .status-badge.success { color: var(--success); }
+  .status-badge.error { color: var(--danger); }
+  .mode-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+  }
+  .mode-tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); padding: .48rem .5rem; }
+  .mode-tabs button:hover { background: var(--surface-hover); color: var(--text); filter: none; }
+  .mode-tabs button.on { background: var(--accent); color: var(--accent-contrast); }
+  .sync-disabled { opacity: .55; }
+  .sync-disabled :global(button), .sync-disabled :global(input), .sync-disabled :global(textarea) { pointer-events: none; }
+  .technical-disclosure { padding: .75rem var(--settings-pad); border-top: 1px solid var(--border); }
+  .technical-control { width: min(100%, 18rem); }
+  .technical-control input { flex: 1; min-width: 0; }
+  .ip-row { flex-wrap: wrap; gap: .4rem; }
+  .changelog-label { margin: 0 var(--settings-pad) .55rem; }
+  .density-seg { min-width: 15rem; }
+  .density-seg .seg-btn { flex: 1; justify-content: center; }
+  .reaction-summary { align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+  .reaction-summary > span { font-size: 1.05rem; }
+  .reaction-picker { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+  /* Sliding switch, sized to sit on the right of an .opt-row. */
   .switch {
     position: relative;
     display: inline-block;
@@ -1402,7 +1464,7 @@
     background: transparent;
     color: var(--text-muted);
     border: none;
-    border-radius: 5px;
+    border-radius: var(--radius-sm);
     font-weight: 500;
     line-height: 1;
     cursor: pointer;
@@ -1431,16 +1493,6 @@
   .swatch.on {
     border-color: var(--text);
     transform: scale(1.08);
-  }
-  .reaction-row {
-    align-items: flex-start;
-  }
-  .reaction-settings {
-    display: flex;
-    align-items: flex-start;
-    gap: .5rem;
-    justify-content: flex-end;
-    min-width: 0;
   }
   .reaction-choice-grid {
     display: grid;
@@ -1473,19 +1525,6 @@
     padding: 0 .7rem;
     border-radius: var(--radius-sm);
     font-size: .85rem;
-  }
-  @media (max-width: 720px) {
-    .reaction-row,
-    .reaction-settings {
-      flex-direction: column;
-      align-items: stretch;
-    }
-    .reaction-choice-grid {
-      grid-template-columns: repeat(auto-fill, minmax(2rem, 1fr));
-    }
-    .reset-reactions {
-      width: fit-content;
-    }
   }
   .progress {
     width: 100%;

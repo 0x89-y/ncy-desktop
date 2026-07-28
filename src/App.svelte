@@ -8,11 +8,13 @@
   import PairRequestModal from "./lib/components/PairRequestModal.svelte";
   import AppUpdateToast from "./lib/components/AppUpdateToast.svelte";
   import CloseToTrayPrompt from "./lib/components/CloseToTrayPrompt.svelte";
+  import ConfirmPrompt from "./lib/components/ConfirmPrompt.svelte";
   import ImageViewer from "./lib/components/ImageViewer.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import { initAppUpdater } from "./lib/stores/updater";
   import { initClosePrompt } from "./lib/stores/tray";
   import { initAutomaticBackups } from "./lib/stores/backups";
+  import { initChatRetention } from "./lib/stores/retention";
   import { Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
@@ -44,6 +46,7 @@
     }
     initAppUpdater();
     initAutomaticBackups();
+    initChatRetention();
   });
 
   $effect(() => {
@@ -102,6 +105,7 @@
 </div>
 
 <PairRequestModal />
+<ConfirmPrompt />
 
 <ImageViewer />
 

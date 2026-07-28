@@ -42,6 +42,8 @@ pub struct AppState {
     pub blobs: Arc<BlobStore>,
     pub automatic_file_download_limit_bytes: Arc<std::sync::atomic::AtomicU64>,
     pub blob_requests: broadcast::Sender<crate::sync::ManualBlobRequest>,
+    /// True while a debounced media sweep is queued — see `commands::schedule_blob_gc`.
+    pub blob_gc_pending: Arc<std::sync::atomic::AtomicBool>,
     /// Phase 3: in-memory per-chat decryption keys, derived from the PIN on unlock.
     pub keystore: Arc<ProtectionKeyStore>,
     /// Queryable WS server status — closes the startup race where the webview
@@ -463,6 +465,7 @@ pub fn run() {
                 blobs: blobs.clone(),
                 automatic_file_download_limit_bytes,
                 blob_requests,
+                blob_gc_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 keystore: Arc::new(ProtectionKeyStore::new()),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
@@ -588,6 +591,13 @@ pub fn run() {
             commands::read_blob,
             commands::blob_exists,
             commands::download_blob_anyway,
+            commands::cancel_blob_download,
+            commands::collect_unused_blobs,
+            commands::evict_blob,
+            commands::blob_evicted,
+            commands::apply_chat_retention,
+            commands::force_full_resync,
+            commands::scrub_deleted_message_content,
             commands::save_blob,
             commands::image_view,
             commands::save_image,

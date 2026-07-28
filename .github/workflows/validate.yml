@@ -1,0 +1,48 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ncy-desktop
+      - uses: actions/checkout@v4
+        with:
+          repository: 0x89-y/ncy-core
+          path: ncy-core
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ncy-desktop/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ncy-desktop
+      - name: Check frontend
+        run: npm run check
+        working-directory: ncy-desktop
+      - name: Test frontend
+        run: npm test
+        working-directory: ncy-desktop
+      - name: Build frontend
+        run: npm run build
+        working-directory: ncy-desktop
+      # Scoped to this repo's crates: `--all` also reaches the sibling ncy-core
+      # path dependency, which is formatted by its own repo.
+      - name: Check Rust formatting
+        run: cargo fmt -p ncy-desktop -p ncy-server --check
+        working-directory: ncy-desktop
+      - name: Test Rust workspace
+        run: cargo test --workspace
+        working-directory: ncy-desktop
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+        working-directory: ncy-desktop

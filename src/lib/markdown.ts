@@ -76,9 +76,34 @@ function parseSpans(text: string): RichTextSpan[] {
     i += 1;
   }
   flush();
-  return spans.length > 0 ? spans : [blankSpan("")];
+  return linkifySpans(spans.length > 0 ? spans : [blankSpan("")]);
 }
 
+
+function linkifySpans(spans: RichTextSpan[]): RichTextSpan[] {
+  const result: RichTextSpan[] = [];
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<]+)/gi;
+  for (const span of spans) {
+    let cursor = 0;
+    for (const match of span.text.matchAll(pattern)) {
+      const index = match.index ?? 0;
+      if (index > cursor) result.push({ ...span, text: span.text.slice(cursor, index) });
+      if (match[1] && match[2]) {
+        result.push({ ...span, text: match[1], link: match[2] });
+        cursor = index + match[0].length;
+      } else {
+        const raw = match[3] ?? "";
+        const url = raw.replace(/[.,!?;:\])]+$/g, "");
+        const trailing = raw.slice(url.length);
+        result.push({ ...span, text: url, link: url });
+        if (trailing) result.push({ ...span, text: trailing, link: null });
+        cursor = index + raw.length;
+      }
+    }
+    if (cursor < span.text.length) result.push({ ...span, text: span.text.slice(cursor) });
+  }
+  return result.length > 0 ? result : [blankSpan("")];
+}
 export function parseMarkdown(input: string): RichTextBlock[] {
   const lines = input.replace(/\r\n?/g, "\n").split("\n");
   const blocks: RichTextBlock[] = [];

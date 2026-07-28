@@ -82,7 +82,13 @@
     font-size: 0.9rem;
     margin: 0 0 0.25rem 0;
   }
-  .rt :global(a) { color: var(--primary); }
+  .rt :global(a) {
+    color: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-thickness: .08em;
+    text-underline-offset: .14em;
+  }
   .task-item { display: flex; align-items: flex-start; gap: 0.45rem; margin: 0.1rem 0; }
   .task-item input { margin-top: 0.22rem; accent-color: var(--primary); }
   .task-item .checked { text-decoration: line-through; opacity: 0.72; }

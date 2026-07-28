@@ -16,12 +16,26 @@ export interface ChangelogEntry {
 export const CHANGELOG: ChangelogEntry[] = [
   {
     version: "0.7.3",
-    date: "2026-07-24",
+    date: "2026-07-27",
     changes: [
+      "Added transfer progress for incoming media, with a button to stop a download.",
+      "Added per-message removal of downloaded media that keeps the message and can be downloaded again.",
+      "Added a media storage panel that reclaims files no message refers to, and runs automatically after deletions.",
+      "Added optional per-chat automatic deletion of messages older than a chosen age, keeping starred messages and upcoming reminders.",
+      "Fixed voice messages over three seconds and files of any appreciable size failing to transfer over Pear.",
+      "Fixed files larger than roughly nine megabytes ending the sync session on a local network.",
+      "Fixed a failed media transfer never being retried, and a large transfer stalling every other message on the connection.",
+      "Fixed links in received messages being opened without checking their address first.",
       "Refined Sync settings with contextual connection descriptions and a compact custom file-download limit.",
       "Moved the editable device name to General and kept its installation ID behind advanced details.",
       "Pairing invitations now use temporary random labels until the authenticated device name is available.",
+      "Added a top-level profile switcher and dedicated profile management.",
       "Removed QR and JSON credentials from paired-device views and restricted code replacement to unused invitations.",
+      "Moved search and filtering into the compact sidebar header and added a pinned-chat filter.",
+      "Made message links clickable, kept context menus on-screen, retained composer focus after sending, and added Up Arrow editing.",
+      "Added active-filter counts and reset, keyboard shortcuts, highlighted keyboard search, per-chat drafts, unsaved-edit protection, and new-message navigation.",
+      "Reorganized every settings page into consistent sections, removed redundant page headings, simplified Sync status, and moved network details into Technical.",
+      "Hardened settings persistence, pairing invitation reads, backup imports, links, edit guards, search, keyboard handling, CSP, and continuous validation.",
     ],
   },
   {

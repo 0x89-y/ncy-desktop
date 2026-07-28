@@ -1,3 +1,4 @@
+import { requestConfirmation } from "./confirm";
 import { writable, derived, get } from "svelte/store";
 import { api, type ChatSummary, type MaterializedChat, type AppSettings, type PairingDescriptor, type PeerView, type SyncEventPayload, type DeviceIdentityView } from "../ipc";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -24,6 +25,30 @@ export const lastSyncEvent = writable<SyncEventPayload | null>(null);
 /** Phase 2b — set of blob hashes that have finished downloading this session.
  * Lets blob-rendering components reactively re-fetch when the bytes land. */
 export const arrivedBlobs = writable<Set<string>>(new Set());
+/** In-flight transfers, keyed by blob hash. Absent = not currently downloading. */
+export const blobProgress = writable<Map<string, { received: number; total: number }>>(new Map());
+/** Transfers that gave up, keyed by blob hash. Cleared when one is retried. */
+export const blobFailures = writable<Map<string, string>>(new Map());
+/** `blobFailures` reason the core uses for a user-initiated cancel, which the UI
+ *  presents as a choice rather than an error. Matches `CANCELLED_REASON` in
+ *  ncy-core's `sync::server`. */
+export const CANCELLED_REASON = "cancelled";
+
+/** Forget any progress/failure state for `hash` — used when a retry starts. */
+export function clearBlobState(hash: string) {
+  blobProgress.update((m) => {
+    if (!m.has(hash)) return m;
+    const next = new Map(m);
+    next.delete(hash);
+    return next;
+  });
+  blobFailures.update((m) => {
+    if (!m.has(hash)) return m;
+    const next = new Map(m);
+    next.delete(hash);
+    return next;
+  });
+}
 
 /** In-flight voice-message transcriptions, keyed by messageId. MessageBubble
  *  reads this to show a "Transcribing…" indicator while the whisper subprocess
@@ -85,7 +110,6 @@ export function dropPairRequest(sessionId: string) {
   pendingPairRequests.update((q) => q.filter((x) => x.sessionId !== sessionId));
 }
 
-export const filterText = writable<string>("");
 export const showArchived = writable<boolean>(false);
 
 /** Top-level view. Search/Starred/Reminders now live as tabs inside the chats
@@ -208,6 +232,21 @@ settingsTab.subscribe((v) => {
 });
 
 export const activeTag = writable<string | null>(null);
+export const pinnedOnly = writable(false);
+export const unsavedMessageEdits = writable<Set<string>>(new Set());
+export function markMessageEdit(messageId: string, active: boolean) {
+  unsavedMessageEdits.update((current) => {
+    const next = new Set(current);
+    if (active) next.add(messageId);
+    else next.delete(messageId);
+    return next;
+  });
+}
+/** Set by the Ctrl+N shortcut, consumed (and cleared) by ChatList's create row.
+ *  A latched flag rather than a counter: Ctrl+N from another tab flips the pane
+ *  and sets this in the same tick ChatList mounts, so the request has to survive
+ *  until the consumer exists — but must not replay on a later manual remount. */
+export const newChatRequest = writable(false);
 /** Profile sync: which profile bucket the chat list is scoped to.
  *  `null` = all profiles, `""` = the legacy/pre-profile-sync "Default" bucket,
  *  `name:<normalized display name>` = all phone profiles with that display name.
@@ -230,6 +269,14 @@ export async function refreshActiveChat() {
 }
 
 export async function selectChat(id: string | null) {
+  if (
+    id !== get(activeChatId) &&
+    get(unsavedMessageEdits).size > 0 &&
+    !await requestConfirmation("Discard the unsaved message edit?", { title: "Unsaved edit", confirmLabel: "Discard", dangerous: true })
+  ) {
+    return;
+  }
+  unsavedMessageEdits.set(new Set());
   activeChatId.set(id);
   await refreshActiveChat();
 }
@@ -368,6 +415,23 @@ export async function bootstrap() {
           next.add(ev.hash);
           return next;
         });
+        clearBlobState(ev.hash);
+        break;
+      case "blob-progress":
+        blobProgress.update((m) => {
+          const next = new Map(m);
+          next.set(ev.hash, { received: ev.received, total: ev.total });
+          return next;
+        });
+        break;
+      case "blob-failed":
+        blobProgress.update((m) => {
+          if (!m.has(ev.hash)) return m;
+          const next = new Map(m);
+          next.delete(ev.hash);
+          return next;
+        });
+        blobFailures.update((m) => new Map(m).set(ev.hash, ev.reason));
         break;
       case "peer-error":
         peerErrors.update((errors) => ({ ...errors, [ev.peer]: ev.message }));
@@ -419,14 +483,14 @@ function profileBucketKey(profileId: string, profileName: string): string {
 }
 
 export const profileBuckets = derived(chats, ($chats) => {
-  const named = new Map<string, { id: string; name: string }>();
+  const named = new Map<string, { id: string; name: string; profileId: string }>();
   let hasDefault = false;
   for (const c of $chats) {
     if (c.profileId) {
       const name = c.profileName || c.profileId.slice(0, 6);
       const id = profileBucketKey(c.profileId, name);
       if (!named.has(id)) {
-        named.set(id, { id, name });
+        named.set(id, { id, name, profileId: c.profileId });
       }
     } else {
       hasDefault = true;
@@ -435,14 +499,13 @@ export const profileBuckets = derived(chats, ($chats) => {
   const list = Array.from(named.values()).sort((a, b) =>
     a.name.localeCompare(b.name)
   );
-  if (hasDefault) list.push({ id: "", name: "Default" });
+  if (hasDefault) list.push({ id: "", name: "Default", profileId: "" });
   return list;
 });
 
 export const visibleChats = derived(
-  [chats, filterText, showArchived, activeTag, activeProfileId],
-  ([$chats, $filter, $showArchived, $tag, $profile]) => {
-    const q = $filter.trim().toLowerCase();
+  [chats, showArchived, activeTag, activeProfileId, pinnedOnly],
+  ([$chats, $showArchived, $tag, $profile, $pinnedOnly]) => {
     return $chats.filter((c) => {
       if ($profile !== null) {
         if ($profile === "") {
@@ -456,12 +519,8 @@ export const visibleChats = derived(
         }
       }
       if (!$showArchived && c.isArchived) return false;
+      if ($pinnedOnly && !c.isPinned) return false;
       if ($tag && !c.tags.includes($tag)) return false;
-      if (q) {
-        const inName = c.name.toLowerCase().includes(q);
-        const inPreview = (c.lastMessagePreview ?? "").toLowerCase().includes(q);
-        if (!inName && !inPreview) return false;
-      }
       return true;
     });
   }

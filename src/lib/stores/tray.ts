@@ -1,6 +1,8 @@
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { api, type DesktopPrefs } from "../ipc";
+import { unsavedMessageEdits } from "./app";
+import { requestConfirmation } from "./confirm";
 
 /** When true, the "keep Ncy in the tray?" prompt is showing (CloseToTrayPrompt). */
 export const closePromptOpen = writable(false);
@@ -17,7 +19,18 @@ let started = false;
 export async function initClosePrompt() {
   if (started) return;
   started = true;
-  await listen("close-requested", () => closePromptOpen.set(true));
+  await listen("close-requested", async () => {
+    if (
+      get(unsavedMessageEdits).size > 0 &&
+      !await requestConfirmation("Discard the unsaved message edit and close Ncy?", {
+        title: "Unsaved edit",
+        confirmLabel: "Discard and close",
+        dangerous: true,
+      })
+    ) return;
+    unsavedMessageEdits.set(new Set());
+    closePromptOpen.set(true);
+  });
 }
 
 /**
