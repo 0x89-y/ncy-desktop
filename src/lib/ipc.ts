@@ -173,6 +173,14 @@ export type AppSettings = {
   syncTransportMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
   /** Local-only threshold for automatic generic file downloads. */
   automaticFileDownloadLimitBytes: number;
+  /**
+   * Media on messages authored before this instant is listed rather than fetched;
+   * the user downloads it on demand. Zero fetches everything.
+   *
+   * Stamped when this device first pairs, so joining an established history does
+   * not pull down every attachment ever sent.
+   */
+  mediaBackfillCutoffMs: number;
 };
 
 export type DesktopPrefs = {

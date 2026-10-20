@@ -15,6 +15,17 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.4",
+    date: "2026-10-20",
+    changes: [
+      "Images, voice notes and files in protected chats are now encrypted with the chat's PIN, including existing ones when a chat is protected or its PIN changes.",
+      "Notes this desktop receives are now passed on to its other connected devices straight away.",
+      "Pairing from current phones uses a committed key exchange, so a relaying device can no longer force the safety codes to match.",
+      "Fixed notes written while a device was offline never reaching devices that had synced in the meantime.",
+      "Fixed a refusal sent before the connection is encrypted stopping reconnection for good.",
+    ],
+  },
+  {
     version: "0.7.3",
     date: "2026-07-27",
     changes: [

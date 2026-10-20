@@ -161,6 +161,9 @@ fn build_state() -> Result<AppState> {
         outbound: outbound.clone(),
         blobs: blobs.clone(),
         automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+        // Headless CLI mirrors the daemon: it is an archive, so it keeps
+        // everything and never declines historical media.
+        media_backfill_cutoff_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         blob_requests: blob_requests.clone(),
         server_status: server_status.clone(),
         server_addr: server_addr.clone(),
@@ -177,6 +180,9 @@ fn build_state() -> Result<AppState> {
         outbound: outbound.clone(),
         blobs: blobs.clone(),
         automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+        // Headless CLI mirrors the daemon: it is an archive, so it keeps
+        // everything and never declines historical media.
+        media_backfill_cutoff_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         blob_requests: blob_requests.clone(),
         peers: peers.clone(),
         peers_path: paths.peers.clone(),
@@ -196,6 +202,7 @@ fn build_state() -> Result<AppState> {
         outbound,
         blobs,
         automatic_file_download_limit_bytes,
+        media_backfill_cutoff_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
         blob_requests,
         blob_gc_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         keystore: Arc::new(ProtectionKeyStore::new()),
@@ -421,6 +428,10 @@ async fn add_pairing(state: &AppState, args: &[String]) -> Result<()> {
         next_retry_at: None,
         last_sent_hlc: None,
         last_received_hlc: None,
+        remote_receipt_epoch: None,
+        last_received_receipt: None,
+        acked_receipt_epoch: None,
+        last_acked_receipt: None,
     });
     save_peers(&state.paths.peers, &peers)?;
     println!("Pairing added.");

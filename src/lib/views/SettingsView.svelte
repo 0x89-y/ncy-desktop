@@ -139,6 +139,7 @@
       syncTransportMode = $settings.syncTransportMode ?? "localOnly";
       automaticFileDownloadLimitBytes =
         $settings.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024;
+      cutoffMs = $settings.mediaBackfillCutoffMs ?? 0;
       automaticFileDownloadMode = [0, 25, 100, 250, 500, 1024]
         .map((mib) => String(mib * 1024 * 1024))
         .includes(String(automaticFileDownloadLimitBytes))
@@ -178,6 +179,7 @@
       transcriptionEnabled,
       syncTransportMode,
       automaticFileDownloadLimitBytes,
+      mediaBackfillCutoffMs: cutoffMs,
     };
   }
 
@@ -403,6 +405,28 @@
     } finally {
       saving = false;
     }
+  }
+
+  // --- Historical media. ---
+  // Pairing into an established mesh replays the whole history at once, so without
+  // a cutoff this device would try to pull every attachment ever sent. Older media
+  // is listed with a Download button instead. Turning this on clears the cutoff and
+  // lets the sweep collect the backlog; it cannot be re-armed, because the stamp
+  // records when this device joined and moving it forward would re-classify media
+  // that has already arrived.
+  let cutoffMs = $state(0);
+  let backfillEverything = $derived(cutoffMs === 0);
+  let backfillHint = $derived(
+    cutoffMs === 0
+      ? "Fetching everything, including media sent before this device was paired."
+      : "Media from before " +
+        new Date(cutoffMs).toLocaleDateString() +
+        " is listed with a Download button instead.",
+  );
+  async function applyBackfill(everything: boolean) {
+    // Turning it off stamps now, so only media from here on arrives by itself.
+    cutoffMs = everything ? 0 : Date.now();
+    await persistSettings({ mediaBackfillCutoffMs: cutoffMs });
   }
 
   // --- Force a full replay to every paired device. ---
@@ -702,6 +726,10 @@
           </select>
           {#if automaticFileDownloadMode === "custom"}<input type="number" min="1" max="1024" step="1" value={Math.max(1, Math.round(automaticFileDownloadLimitBytes / (1024 * 1024)))} aria-label="Custom automatic file download limit in megabytes" onchange={async (event) => { const mib = Math.max(1, Math.min(1024, Number(event.currentTarget.value) || 1)); automaticFileDownloadLimitBytes = mib * 1024 * 1024; await persistSettings({ automaticFileDownloadLimitBytes }); }} />{/if}
           <span class="tiny muted">Larger files remain available to download manually.</span>
+        </label>
+        <label class="opt-row">
+          <span class="opt-label">Download media from before pairing<span class="inline-hint">{backfillHint}</span></span>
+          <span class="switch"><input type="checkbox" checked={backfillEverything} onchange={(e) => applyBackfill(e.currentTarget.checked)} /><span class="slider"></span></span>
         </label>
       </div>
     </div>

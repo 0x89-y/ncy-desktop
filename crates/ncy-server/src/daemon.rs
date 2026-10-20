@@ -120,6 +120,9 @@ pub async fn run(config: Config) -> Result<()> {
             outbound: outbound.clone(),
             blobs: blobs.clone(),
             automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+            // An always-on peer is the archive: it keeps everything, so it
+            // never declines historical media.
+            media_backfill_cutoff_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blob_requests: blob_requests.clone(),
             server_status: server_status.clone(),
             server_addr: server_addr.clone(),
@@ -163,6 +166,9 @@ pub async fn run(config: Config) -> Result<()> {
             outbound: outbound.clone(),
             blobs: blobs.clone(),
             automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+            // An always-on peer is the archive: it keeps everything, so it
+            // never declines historical media.
+            media_backfill_cutoff_ms: Arc::new(std::sync::atomic::AtomicI64::new(0)),
             blob_requests: blob_requests.clone(),
             peers: peers.clone(),
             peers_path: paths.peers.clone(),

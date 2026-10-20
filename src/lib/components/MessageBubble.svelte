@@ -757,7 +757,7 @@
                 ? "Voice message · removed from this device"
                 : voiceMissing
                   ? "Voice message · not on this device"
-                  : `Voice message${message.voiceDurationMs ? ` · ${Math.round(message.voiceDurationMs / 1000)}s` : ""} · downloading…`}
+                  : `Voice message${message.voiceDurationMs ? ` · ${Math.round(message.voiceDurationMs / 1000)}s` : ""} · not on this device`}
             />
             {#if voiceMissing || mediaEvicted || $blobFailures.has(voiceHash)}
               <button
@@ -821,7 +821,7 @@
               ? "Image · removed from this device"
               : imageMissing
                 ? "Image · not on this device"
-                : "Image · downloading…"}
+                : "Image · not on this device"}
           />
           {#if imageMissing || mediaEvicted || $blobFailures.has(imageHash)}
             <button
@@ -852,7 +852,7 @@
               ? "Transfer failed — retry"
               : fileDeferred
                 ? "Download anyway"
-                : "Downloading file"}
+                : "Not on this device — download"}
         >
           <Paperclip size={20} strokeWidth={2.1} />
           <span class="file-info">
@@ -883,7 +883,7 @@
             <TransferStatus
               hash={fileHash}
               mediaType="file"
-              idleText={mediaEvicted ? "removed from this device" : "downloading…"}
+              idleText={mediaEvicted ? "removed from this device" : "not on this device"}
             />
             {#if mediaEvicted}
               <button

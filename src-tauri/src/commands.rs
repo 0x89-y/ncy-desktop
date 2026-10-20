@@ -466,11 +466,47 @@ async fn pairing_pear_public_key(state: &AppState) -> Result<Option<String>, Str
         .ok_or_else(|| "Pear started without providing a public key".to_string())
 }
 
+/// Record that this device has joined a mesh, so media predating the moment is
+/// listed rather than downloaded.
+///
+/// Called on every path that establishes a link to another device. Only the first
+/// one takes effect — once stamped, the value is the instant this device became
+/// part of the mesh, and later pairings must not move it forward or they would
+/// re-classify media that has already arrived.
+///
+/// A device that has never paired keeps a zero cutoff. It has no history to
+/// decline, and if it later pairs, the stamp lands then.
+async fn stamp_media_backfill_cutoff(state: &AppState) {
+    if state
+        .media_backfill_cutoff_ms
+        .load(std::sync::atomic::Ordering::Relaxed)
+        > 0
+    {
+        return;
+    }
+    let now = now_ms();
+    let settings = {
+        let mut guard = state.settings.write().await;
+        if guard.media_backfill_cutoff_ms > 0 {
+            return;
+        }
+        guard.media_backfill_cutoff_ms = now;
+        guard.clone()
+    };
+    state
+        .media_backfill_cutoff_ms
+        .store(now, std::sync::atomic::Ordering::Relaxed);
+    if let Err(e) = crate::storage::settings::save(&state.paths.settings, &settings) {
+        tracing::warn!("could not persist the media backfill cutoff: {e}");
+    }
+}
+
 #[tauri::command]
 pub async fn create_pairing(
     state: State<'_, AppState>,
     label: String,
 ) -> Result<PairingDescriptor, String> {
+    stamp_media_backfill_cutoff(&state).await;
     let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairing = Pairing::new_with_label(label);
     {
@@ -559,6 +595,7 @@ pub async fn pair_accept(
     session_id: String,
     label: String,
 ) -> Result<(), String> {
+    stamp_media_backfill_cutoff(&state).await;
     let pear_public_key = pairing_pear_public_key(&state).await?;
     let session = {
         let mut reg = state.pairing_registry.lock().await;
@@ -680,6 +717,7 @@ pub struct PeerView {
 /// immediately and starts a reconnecting connection.
 #[tauri::command]
 pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Result<(), String> {
+    stamp_media_backfill_cutoff(&state).await;
     let p: IncomingPairing = serde_json::from_str(payload_json.trim())
         .map_err(|e| format!("not a valid pairing JSON: {e}"))?;
     if p.device_id == state.identity_device_id {
@@ -726,6 +764,10 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
         next_retry_at: None,
         last_sent_hlc: None,
         last_received_hlc: None,
+        remote_receipt_epoch: None,
+        last_received_receipt: None,
+        acked_receipt_epoch: None,
+        last_acked_receipt: None,
     });
     save_peers(&state.paths.peers, &guard).map_err(|e| e.to_string())?;
     drop(guard);
@@ -811,6 +853,10 @@ pub async fn update_settings(
     *state.settings.write().await = settings.clone();
     state.automatic_file_download_limit_bytes.store(
         settings.automatic_file_download_limit_bytes,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    state.media_backfill_cutoff_ms.store(
+        settings.media_backfill_cutoff_ms,
         std::sync::atomic::Ordering::Relaxed,
     );
 
@@ -957,6 +1003,7 @@ fn current_message(
 fn seal_envelope(
     sealed: &crate::sync::protection::Sealed,
     supersedes: Option<&str>,
+    blobs: &[crate::sync::protected_media::BlobRef],
 ) -> serde_json::Value {
     use base64::{engine::general_purpose::STANDARD as B64, Engine};
     let mut env = serde_json::json!({
@@ -964,11 +1011,44 @@ fn seal_envelope(
         "enc": "AES-256-GCM",
         "nonce": B64.encode(sealed.nonce),
         "ct": B64.encode(&sealed.ciphertext),
+        // The sealed attachments, in the clear (§11.8): hashes of ciphertext, so a
+        // device without the key can still fetch, relay and keep them.
+        "blobs": blobs,
     });
     if let Some(s) = supersedes {
         env["supersedes"] = serde_json::Value::String(s.to_string());
     }
     env
+}
+
+/// The key a new attachment must be sealed with, when the chat is protected.
+/// A locked protected chat refuses, as sending text there does.
+fn attachment_key(state: &AppState, chat_id: &str) -> Result<Option<[u8; 32]>, String> {
+    if !current_metadata(&state.events, chat_id)?.is_protected {
+        return Ok(None);
+    }
+    state
+        .keystore
+        .key_for(chat_id)
+        .map(Some)
+        .ok_or_else(|| "chat is locked — unlock it before sending".to_string())
+}
+
+/// Store a new attachment's bytes, sealed when the chat is protected; returns its hash.
+fn store_attachment(state: &AppState, chat_id: &str, bytes: &[u8], media_type: &str) -> Result<String, String> {
+    match attachment_key(state, chat_id)? {
+        Some(key) => crate::sync::protected_media::store_sealed_bytes(&state.blobs, bytes, media_type, &key)
+            .map(|(hash, _)| hash)
+            .map_err(|e| format!("persist blob: {e}")),
+        None => {
+            let hash = crate::sync::blob::sha256_hex(bytes);
+            state
+                .blobs
+                .write_verified(&hash, media_type, bytes)
+                .map_err(|e| format!("persist blob: {e}"))?;
+            Ok(hash)
+        }
+    }
 }
 
 /// Author a `MessageCreated`/`MessageEdited` event. In a protected chat the message
@@ -983,9 +1063,14 @@ fn author_message(state: &AppState, chat_id: &str, op: &str, msg: &Message) -> R
             .keystore
             .key_for(chat_id)
             .ok_or_else(|| "chat is locked — unlock it before sending".to_string())?;
-        let plaintext = serde_json::to_vec(msg).map_err(|e| e.to_string())?;
+        // New attachments arrive sealed already; this catches any that do not
+        // (an edit keeping media from before protection) and lists them all.
+        let mut msg = msg.clone();
+        let refs = crate::sync::protected_media::seal_message_media(&state.blobs, &mut msg, &key, None)
+            .map_err(|e| format!("seal attachments: {e}"))?;
+        let plaintext = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
         let sealed = crate::sync::protection::seal(&key, &plaintext).map_err(|e| e.to_string())?;
-        seal_envelope(&sealed, None)
+        seal_envelope(&sealed, None, &refs)
     } else {
         serde_json::to_value(msg).map_err(|e| e.to_string())?
     };
@@ -1036,9 +1121,20 @@ fn reseal_all_messages(
         work.push((w.event_id.clone(), w.op_type.clone(), plaintext));
     }
     // Phase 2 — author one fresh sealed event per message, superseding the old.
+    // Attachments are (re-)sealed under the new key too, which gives them new
+    // hashes; the message JSON is edited in place so unknown fields survive.
     for (old_id, op, pt) in &work {
-        let sealed = crate::sync::protection::seal(new_key, pt).map_err(|e| e.to_string())?;
-        let payload = seal_envelope(&sealed, Some(old_id));
+        let mut message: serde_json::Value = serde_json::from_slice(pt).map_err(|e| e.to_string())?;
+        let refs = crate::sync::protected_media::seal_message_json_media(
+            &state.blobs,
+            &mut message,
+            new_key,
+            old_key,
+        )
+        .map_err(|e| format!("seal attachments: {e}"))?;
+        let pt = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
+        let sealed = crate::sync::protection::seal(new_key, &pt).map_err(|e| e.to_string())?;
+        let payload = seal_envelope(&sealed, Some(old_id), &refs);
         author_event(
             &state.clock,
             &state.events,
@@ -1101,7 +1197,18 @@ pub async fn protect_chat(
 
     state.keystore.unlock(&chat_id, key);
     reseal_all_messages(state.inner(), &chat_id, &key, None)?;
+    drop_unsealed_originals(state.inner());
     Ok(())
+}
+
+/// After re-sealing, the plain (or old-key) attachments are referenced by nothing.
+/// Collection refuses to delete while any chat is locked, so this never guesses.
+fn drop_unsealed_originals(state: &AppState) {
+    if let Err(e) =
+        crate::sync::collect_unreferenced_blobs(&state.events, &state.blobs, &state.keystore, false)
+    {
+        tracing::warn!("could not drop attachments replaced by sealed copies: {e}");
+    }
 }
 
 /// Change a protected chat's PIN. Verifies the current PIN against an existing
@@ -1149,6 +1256,7 @@ pub async fn change_chat_pin(
         crate::sync::protection::derive_key(&new_pin, &salt).map_err(|e| e.to_string())?;
     reseal_all_messages(state.inner(), &chat_id, &new_key, Some(&old_key))?;
     state.keystore.unlock(&chat_id, new_key);
+    drop_unsealed_originals(state.inner());
     Ok(())
 }
 
@@ -1795,11 +1903,8 @@ pub async fn author_send_voice(
     if bytes.is_empty() {
         return Err("empty voice payload".into());
     }
-    let hash = crate::sync::blob::sha256_hex(&bytes);
-    state
-        .blobs
-        .write_verified(&hash, "voice", &bytes)
-        .map_err(|e| format!("persist blob: {e}"))?;
+    // Sealed before it is stored when the chat is protected, so no plain copy lands.
+    let hash = store_attachment(state.inner(), &chat_id, &bytes, "voice")?;
 
     let reference = format!("voice/{}.m4a", hash);
     let msg = Message {
@@ -1849,11 +1954,7 @@ pub async fn author_send_image(
     if bytes.is_empty() {
         return Err("empty image file".into());
     }
-    let hash = crate::sync::blob::sha256_hex(&bytes);
-    state
-        .blobs
-        .write_verified(&hash, "image", &bytes)
-        .map_err(|e| format!("persist blob: {e}"))?;
+    let hash = store_attachment(state.inner(), &chat_id, &bytes, "image")?;
 
     let reference = format!("images/{}.jpg", hash);
     let msg = Message {
@@ -1905,10 +2006,19 @@ pub async fn author_send_file(
     reply_to_id: Option<String>,
 ) -> Result<(), String> {
     let source = std::path::Path::new(&source_path);
-    let (hash, size) = state
-        .blobs
-        .import_file(source, "file")
-        .map_err(|e| format!("import file: {e}"))?;
+    let (hash, size) = match attachment_key(state.inner(), &chat_id)? {
+        Some(key) => {
+            // The message shows the real size; the sealed blob is a little larger.
+            let size = std::fs::metadata(source).map_err(|e| format!("import file: {e}"))?.len();
+            let (hash, _) = crate::sync::protected_media::import_sealed(&state.blobs, source, "file", &key)
+                .map_err(|e| format!("import file: {e}"))?;
+            (hash, size)
+        }
+        None => state
+            .blobs
+            .import_file(source, "file")
+            .map_err(|e| format!("import file: {e}"))?,
+    };
     let fallback_name = source
         .file_name()
         .and_then(|name| name.to_str())
@@ -1964,9 +2074,8 @@ pub async fn read_blob(
     if !state.blobs.exists(&hash, &media_type) {
         return Ok(None);
     }
-    let bytes = state
-        .blobs
-        .read(&hash, &media_type)
+    // Opens a protected chat's sealed attachment with its unlocked key (§11.8).
+    let bytes = crate::sync::protected_media::read_plain(&state.blobs, &state.keystore, &hash, &media_type)
         .map_err(|e| e.to_string())?;
     Ok(Some(B64.encode(bytes)))
 }
@@ -2303,8 +2412,15 @@ pub async fn save_blob(
     if !source.is_file() {
         return Err("file not on this device yet".into());
     }
-    std::fs::copy(source, dest).map_err(|e| e.to_string())?;
-    Ok(())
+    // A sealed attachment is saved as its readable contents, never the ciphertext.
+    crate::sync::protected_media::export_plain(
+        &state.blobs,
+        &state.keystore,
+        &hash,
+        &media_type,
+        std::path::Path::new(&dest),
+    )
+    .map_err(|e| e.to_string())
 }
 
 // ---------- Image viewer: view / save / copy ----------
@@ -2333,7 +2449,8 @@ fn load_image(state: &AppState, hash: &str) -> Result<(Vec<u8>, image::ImageForm
     if !state.blobs.exists(hash, "image") {
         return Err("image not on this device yet".into());
     }
-    let bytes = state.blobs.read(hash, "image").map_err(|e| e.to_string())?;
+    let bytes = crate::sync::protected_media::read_plain(&state.blobs, &state.keystore, hash, "image")
+        .map_err(|e| e.to_string())?;
     let format = image::guess_format(&bytes).map_err(|e| format!("unrecognized image: {e}"))?;
     Ok((bytes, format))
 }
@@ -2929,9 +3046,7 @@ pub async fn author_transcribe_voice(
     if !state.blobs.exists(&hash, "voice") {
         return Err("voice blob not yet on this device — wait for it to sync".into());
     }
-    let bytes = state
-        .blobs
-        .read(&hash, "voice")
+    let bytes = crate::sync::protected_media::read_plain(&state.blobs, &state.keystore, &hash, "voice")
         .map_err(|e| format!("read blob: {e}"))?;
 
     let paths = whisper_paths(state.inner());

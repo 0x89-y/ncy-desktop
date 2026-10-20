@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.4 — 2026-10-20
+
+### Added
+
+- Events the server receives are now relayed to its other connected devices straight
+  away, instead of waiting for them to reconnect.
+
+### Fixed
+
+- Fixed notes written on a device while it was offline never reaching devices that had
+  synced in the meantime: catch-up now follows the order the server stored events in,
+  not their timestamps.
+- Fixed a refusal that arrives before the connection is encrypted stopping outbound
+  reconnection for good.
+
 ## 0.7.2 — 2026-07-24
 
 ### Added

@@ -41,6 +41,9 @@ pub struct AppState {
     pub outbound: OutboundTx,
     pub blobs: Arc<BlobStore>,
     pub automatic_file_download_limit_bytes: Arc<std::sync::atomic::AtomicU64>,
+    /// Media older than this is listed rather than fetched — see
+    /// `AppSettings::media_backfill_cutoff_ms`. Shared with both sync roles.
+    pub media_backfill_cutoff_ms: Arc<std::sync::atomic::AtomicI64>,
     pub blob_requests: broadcast::Sender<crate::sync::ManualBlobRequest>,
     /// True while a debounced media sweep is queued — see `commands::schedule_blob_gc`.
     pub blob_gc_pending: Arc<std::sync::atomic::AtomicBool>,
@@ -354,6 +357,9 @@ pub fn run() {
             let (bus, _initial_rx) = broadcast::channel::<SyncEvent>(256);
             let (outbound, _initial_outbound_rx) = broadcast::channel::<OutboundEvent>(256);
             let (blob_requests, _) = broadcast::channel::<crate::sync::ManualBlobRequest>(64);
+            let media_backfill_cutoff_ms = Arc::new(std::sync::atomic::AtomicI64::new(
+                settings.media_backfill_cutoff_ms,
+            ));
             let automatic_file_download_limit_bytes = Arc::new(std::sync::atomic::AtomicU64::new(
                 settings.automatic_file_download_limit_bytes,
             ));
@@ -424,6 +430,7 @@ pub fn run() {
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
                 automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+                media_backfill_cutoff_ms: media_backfill_cutoff_ms.clone(),
                 blob_requests: blob_requests.clone(),
                 server_status: server_status.clone(),
                 server_addr: server_addr.clone(),
@@ -444,6 +451,7 @@ pub fn run() {
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
                 automatic_file_download_limit_bytes: automatic_file_download_limit_bytes.clone(),
+                media_backfill_cutoff_ms: media_backfill_cutoff_ms.clone(),
                 blob_requests: blob_requests.clone(),
                 peers: peers.clone(),
                 peers_path: paths.peers.clone(),
@@ -464,6 +472,7 @@ pub fn run() {
                 outbound: outbound.clone(),
                 blobs: blobs.clone(),
                 automatic_file_download_limit_bytes,
+                media_backfill_cutoff_ms,
                 blob_requests,
                 blob_gc_pending: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 keystore: Arc::new(ProtectionKeyStore::new()),

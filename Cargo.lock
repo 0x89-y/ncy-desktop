@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "ncy-core"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "ncy-desktop"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2910,7 +2910,7 @@ dependencies = [
 
 [[package]]
 name = "ncy-server"
-version = "0.7.3"
+version = "0.7.4"
 dependencies = [
  "anyhow",
  "clap",

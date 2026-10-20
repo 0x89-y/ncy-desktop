@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.7.4 — 2026-10-20
+
+### Added
+
+- Images, voice notes and files sent in protected chats are now encrypted with the chat's
+  PIN. Protecting a chat or changing its PIN encrypts its existing attachments too, and
+  the unencrypted originals are removed.
+- Notes this desktop receives are now passed on to its other connected devices straight
+  away, instead of waiting for them to reconnect.
+
+### Security
+
+- Pairing requests from current phones use a committed key exchange, so a device relaying
+  between phone and desktop can no longer force the two safety codes to match. Older
+  phones can still pair.
+
+### Fixed
+
+- Fixed notes written on a device while it was offline never reaching devices that had
+  synced in the meantime.
+- Fixed a refusal that arrives before the connection is encrypted stopping reconnection
+  for good; it now shows a warning and keeps retrying.
+
 ## 0.7.3 — 2026-07-27
 
 ### Added
