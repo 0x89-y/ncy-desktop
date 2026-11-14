@@ -133,6 +133,7 @@
   }
   .modal {
     width: min(420px, 100%);
+    border-radius: var(--radius-dialog);
     gap: 0.75rem;
     padding: 1.25rem;
     box-shadow: var(--card-shadow);

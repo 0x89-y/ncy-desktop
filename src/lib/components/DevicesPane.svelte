@@ -459,7 +459,7 @@
   .attempt-outcome {
     display: inline-flex;
     padding: 1px 8px;
-    border-radius: var(--radius-pill, 999px);
+    border-radius: var(--radius-sm);
     font-size: 0.72rem;
     font-weight: 600;
     background: var(--surface-2);

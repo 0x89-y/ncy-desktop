@@ -226,7 +226,7 @@
     overflow: auto;
     transform: translate(-50%, -50%);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-dialog);
     background: var(--surface);
     box-shadow: var(--shadow);
   }

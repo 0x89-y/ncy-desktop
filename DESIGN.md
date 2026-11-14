@@ -46,6 +46,11 @@ bubbles, per the spec's own carve-out.
 
 ## Screens
 
+**Title bar**: in the chats view, a button at the top left collapses the chat list to a
+narrow column of chat avatars with a new-chat button, or expands it again
+(remembered per device; Ctrl+K and Ctrl+N expand it). On the right:
+the sync status dot, the settings gear and the window buttons. No wordmark.
+
 **Chats** — a left pane with three tabs (Chats · Favorites · Reminders), a profile
 switcher and search/filter actions in its header row, and the conversation on the
 right. Search is a **toggle in the header**, not a tab; opening it reveals a search
@@ -61,6 +66,10 @@ source link, and the changelog from `src/lib/changelog.ts`.
 ## Deliberate local choices
 
 Where cy-design offers a choice, this is what ncy-desktop picked and why.
+
+- **No wordmark, no dotted ground.** Like Acy and Spool, the title bar has no
+  "0x" wordmark, and like Acy the page background is plain `--bg` without the
+  dot grid. Dialogs use `--radius-dialog` (12px), matching Acy.
 
 - **Flat overlays.** The spec permits a single soft shadow (`--shadow-pop`) on
   transient floating layers — context menus, popovers, inline editors — but does

@@ -1284,7 +1284,7 @@
     height: 1.15rem;
     padding: 0 .35rem;
     border: 1px solid color-mix(in srgb, var(--bubble-mine-on, currentColor) 18%, transparent);
-    border-radius: 999px;
+    border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 10%, transparent);
     overflow: hidden;
     text-overflow: ellipsis;

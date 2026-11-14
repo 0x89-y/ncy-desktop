@@ -37,7 +37,7 @@
 
 <style>
   .backdrop { position:fixed; inset:32px 0 0; z-index:1000; display:grid; place-items:center; padding:1rem; background:color-mix(in srgb, var(--surface) 72%, transparent); }
-  .dialog { width:min(26rem, 100%); border:1px solid var(--border-strong); border-radius:var(--radius); background:var(--surface); }
+  .dialog { width:min(26rem, 100%); border:1px solid var(--border-strong); border-radius:var(--radius-dialog); background:var(--surface); }
   header { display:flex; align-items:center; gap:.6rem; padding:.8rem 1rem; border-bottom:1px solid var(--border); }
   header strong { flex:1; }
   p { margin:0; padding:1rem; color:var(--text-muted); line-height:1.45; }

@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { activeView, bootstrap, settings, serverStatus, connectedPeers, pairings } from "./lib/stores/app";
+  import { activeView, bootstrap, chatListCollapsed, settings, serverStatus, connectedPeers, pairings } from "./lib/stores/app";
   import ChatListPane from "./lib/components/ChatListPane.svelte";
   import ChatView from "./lib/components/ChatView.svelte";
+  import ChatRail from "./lib/components/ChatRail.svelte";
   import WindowControls from "./lib/components/WindowControls.svelte";
   import ResizeHandles from "./lib/components/ResizeHandles.svelte";
   import PairRequestModal from "./lib/components/PairRequestModal.svelte";
@@ -15,7 +16,7 @@
   import { initClosePrompt } from "./lib/stores/tray";
   import { initAutomaticBackups } from "./lib/stores/backups";
   import { initChatRetention } from "./lib/stores/retention";
-  import { Settings as SettingsIcon } from "@lucide/svelte";
+  import { PanelLeft, Settings as SettingsIcon } from "@lucide/svelte";
 
   let booted = $state(false);
 
@@ -59,7 +60,18 @@
 </script>
 
 <header class="titlebar" data-tauri-drag-region>
-  <span class="brand mono" data-tauri-drag-region>ncy</span>
+  {#if $activeView === "chats"}
+    <button
+      type="button"
+      class="tb-btn"
+      title={$chatListCollapsed ? "Expand chat list" : "Collapse chat list"}
+      aria-label={$chatListCollapsed ? "Expand chat list" : "Collapse chat list"}
+      aria-expanded={!$chatListCollapsed}
+      onclick={() => chatListCollapsed.update((v) => !v)}
+    >
+      <PanelLeft size={16} strokeWidth={2.25} />
+    </button>
+  {/if}
   <div class="drag" data-tauri-drag-region></div>
 
   <div
@@ -91,10 +103,15 @@
   {#if !booted}
     <div class="boot muted">Loading…</div>
   {:else if $activeView === "chats"}
-    <div class="chats-pane">
+    <div class="chats-pane" class:list-collapsed={$chatListCollapsed}>
+      <!-- Hidden with CSS rather than unmounted, so search text, filters and
+           the list's keyboard shortcuts survive collapsing. -->
       <div class="chat-list-pane">
         <ChatListPane />
       </div>
+      {#if $chatListCollapsed}
+        <div class="chat-rail-pane"><ChatRail /></div>
+      {/if}
       <div class="chat-view-pane">
         <ChatView />
       </div>
@@ -121,20 +138,10 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 0 4px 0 14px;
+    padding: 0 4px 0 8px;
     background: var(--surface);
     border-bottom: 1px solid var(--border);
     user-select: none;
-  }
-  .brand {
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text);
-  }
-  .brand::before {
-    content: "0x";
-    color: var(--accent);
   }
   .drag { flex: 1; height: 100%; }
 
@@ -200,6 +207,14 @@
     display: grid;
     grid-template-columns: 320px 1fr;
     min-width: 0;
+  }
+  .chats-pane.list-collapsed { grid-template-columns: 56px 1fr; }
+  .chats-pane.list-collapsed .chat-list-pane { display: none; }
+  .chat-rail-pane {
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+    overflow: hidden;
+    min-height: 0;
   }
   .chat-list-pane {
     border-right: 1px solid var(--border);

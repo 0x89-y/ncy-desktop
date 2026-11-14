@@ -1499,7 +1499,7 @@
     text-align: center;
     padding: 1.75rem;
     border: 1px solid var(--border);
-    border-radius: 16px;
+    border-radius: var(--radius-dialog);
     background: var(--surface);
   }
   .lock-card h2 { margin: 0; font-size: 1.1rem; }

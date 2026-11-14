@@ -195,6 +195,25 @@ chatListDensity.subscribe((v) => {
   }
 });
 
+/** Whether the chat list pane is hidden, toggled from the title bar. Persisted
+ *  per-device like the densities. */
+const CHAT_LIST_COLLAPSED_KEY = "ncy:chat-list-collapsed";
+function readChatListCollapsed(): boolean {
+  try {
+    return localStorage.getItem(CHAT_LIST_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+export const chatListCollapsed = writable<boolean>(readChatListCollapsed());
+chatListCollapsed.subscribe((v) => {
+  try {
+    localStorage.setItem(CHAT_LIST_COLLAPSED_KEY, v ? "1" : "0");
+  } catch {
+    // Storage unavailable: the choice just isn't remembered.
+  }
+});
+
 /** Active section within the settings view. Persisted per-device so reopening
  *  Settings lands on the last-used section. */
 export type SettingsTab = "general" | "sync" | "interface" | "transcription" | "backup" | "changelog" | "about";

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from "../ipc";
-  import { activeTag, allTags, chatPane, chats, lastSyncEvent, newChatRequest, pinnedOnly, showArchived, type ChatPane } from "../stores/app";
+  import { activeTag, allTags, chatListCollapsed, chatPane, chats, lastSyncEvent, newChatRequest, pinnedOnly, showArchived, type ChatPane } from "../stores/app";
   import { Bell, Check, Filter, MessageSquare, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
   import ChatList from "./ChatList.svelte";
   import ProfileMenu from "./ProfileMenu.svelte";
@@ -40,14 +40,17 @@
 
   function onWindowKey(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
+    // Both act on the list, so they bring a hidden list back first.
     if (mod && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
+      chatListCollapsed.set(false);
       if (!searchOpen) toggleSearch();
       else requestAnimationFrame(() => searchInput?.focus());
       return;
     }
     if (mod && (e.key === "n" || e.key === "N")) {
       e.preventDefault();
+      chatListCollapsed.set(false);
       chatPane.set("chats");
       newChatRequest.set(true);
       return;

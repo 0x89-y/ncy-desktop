@@ -9,11 +9,11 @@
 
   --radius: 10px;
   --radius-sm: 7px;
+  --radius-dialog: 12px;
   --radius-pill: 999px;
 
   /* Light theme */
   --bg: #f4f4f5;
-  --grid-dot: rgba(0, 0, 0, 0.06);
   --surface: #ffffff;
   --surface-2: #f7f7f8;
   --surface-hover: #f0f0f2;
@@ -53,7 +53,6 @@
 
 [data-theme='dark'] {
   --bg: #161619;
-  --grid-dot: rgba(255, 255, 255, 0.04);
   --surface: #202024;
   --surface-2: #27272c;
   --surface-hover: #2e2e34;
@@ -103,9 +102,6 @@ body {
   font-family: var(--font-sans);
   color: var(--text);
   background-color: var(--bg);
-  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
-  background-size: 22px 22px;
-  background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
