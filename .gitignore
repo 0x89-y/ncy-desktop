@@ -34,9 +34,10 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Release staging (installer + latest.json, attached to a GitHub release)
+# Release staging (local fallback builds)
 release/
 
 # Local scratch
 TODO.md
 QUICK_CHANGELOG.md
+RELEASING.md

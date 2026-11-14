@@ -1,4 +1,4 @@
-// Release helpers shared by the GitHub release workflow and publish-release.bat.
+// Release helpers used by the GitHub release workflow (and local fallback builds).
 //
 //   node scripts/release.mjs version [tag]
 //       Prints the app version. Fails if package.json, src-tauri/Cargo.toml and
