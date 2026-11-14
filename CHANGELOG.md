@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.6 - 2026-11-14
+
+### Added
+
+- A button at the top left of the title bar collapses the chat list to a column of chat
+  avatars, or expands it again.
+
+### Changed
+
+- Removed the "0x ncy" title from the title bar and the dotted background.
+- Status tags have small rounded corners instead of pill ends, and dialogs share one
+  corner radius.
+
 ## 0.7.5 — 2026-11-14
 
 ### Changed

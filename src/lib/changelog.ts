@@ -15,6 +15,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.6",
+    date: "2026-11-14",
+    changes: [
+      "Added a button that collapses the chat list to a column of chat avatars.",
+      "Removed the \"0x ncy\" title from the title bar and the dotted background.",
+      "Status tags have small rounded corners instead of pill ends, and dialogs share one corner radius.",
+    ],
+  },
+  {
     version: "0.7.5",
     date: "2026-11-14",
     changes: [
