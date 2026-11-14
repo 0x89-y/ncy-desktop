@@ -15,6 +15,15 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.7.5",
+    date: "2026-11-14",
+    changes: [
+      "Updates now come from GitHub releases instead of 0x89-y.xyz.",
+      "Removed Pear sync and the Connection mode setting; devices sync over the local network only.",
+      "Devices paired only over Pear need to be paired again.",
+    ],
+  },
+  {
     version: "0.7.4",
     date: "2026-10-20",
     changes: [

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.5 — 2026-11-14
+
+### Changed
+
+- Updates now come from the GitHub releases of 0x89-y/ncy-desktop instead of
+  0x89-y.xyz.
+
+### Removed
+
+- Removed Pear sync and the Connection mode setting. Devices sync over the local network
+  only, and the installer no longer includes the Bare runtime and Pear worker. Devices
+  that were paired only over Pear need to be paired again.
+
 ## 0.7.4 — 2026-10-20
 
 ### Added
