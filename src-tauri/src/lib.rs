@@ -7,7 +7,6 @@ pub mod commands;
 // resolving unchanged.
 pub use ncy_core::{model, network, storage, sync};
 
-use std::path::PathBuf;
 use std::sync::{Arc, RwLock as StdRwLock};
 
 use tauri::menu::{Menu, MenuItem};
@@ -22,9 +21,8 @@ use crate::storage::{
 };
 use crate::sync::{
     run_peer_supervisor_with_shutdown, run_server_with_shutdown, BlobStore, DesktopClock,
-    MdnsRegistration, OutboundEvent, OutboundTx, PairSecurityState, PairingRegistry, PearGateway,
-    PearSidecar, PearSidecarStatus, PeerSyncDeps, ProtectionKeyStore, ServerContext, SyncEvent,
-    SyncTransportMode,
+    MdnsRegistration, OutboundEvent, OutboundTx, PairSecurityState, PairingRegistry, PeerSyncDeps,
+    ProtectionKeyStore, ServerContext, SyncEvent,
 };
 use commands::DesktopPrefs;
 
@@ -77,13 +75,6 @@ pub struct AppState {
     pub server_ctx: Arc<ServerContext>,
     /// Ditto for the outbound peer supervisor.
     pub peer_deps: Arc<PeerSyncDeps>,
-    pub transport_mode: Arc<RwLock<SyncTransportMode>>,
-    pub pear_gateway: Arc<RwLock<Option<Arc<PearGateway>>>>,
-    pub pear_sidecar: Arc<RwLock<Option<Arc<PearSidecar>>>>,
-    pub pear_public_key: Arc<RwLock<Option<String>>>,
-    pub pear_runtime_path: PathBuf,
-    pub pear_bundle_path: PathBuf,
-    pub pear_seed_path: PathBuf,
     /// `Some` exactly while the sync stack is running. Doubles as the "is sync
     /// up?" flag — see [`apply_sync_enabled`].
     pub sync_shutdown: std::sync::Mutex<Option<SyncHandle>>,
@@ -145,9 +136,6 @@ pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
 
     if enabled {
         let settings = state.settings.read().await.clone();
-        if let Err(error) = apply_pear_mode(state, settings.sync_transport_mode).await {
-            tracing::error!(target: "ncy_pear", "start Pear transport: {error}");
-        }
         *state.server_status.write().await = "starting";
         let handle = spawn_sync(state, settings.port);
         *state.sync_shutdown.lock().unwrap() = Some(handle);
@@ -157,7 +145,6 @@ pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
             announce_mdns(state, settings.port).await;
         }
     } else {
-        stop_pear(state).await;
         let handle = state.sync_shutdown.lock().unwrap().take();
         if let Some(handle) = handle {
             let _ = handle.shutdown.send(());
@@ -171,77 +158,6 @@ pub async fn apply_sync_enabled(state: &AppState, enabled: bool) {
         // the "stopped" status and the ServerStopped event on its way out.
         *state.mdns.lock().unwrap() = None;
     }
-}
-
-fn load_or_create_pear_seed(path: &std::path::Path) -> anyhow::Result<String> {
-    if let Ok(seed) = std::fs::read_to_string(path) {
-        let seed = seed.trim();
-        if !seed.is_empty() {
-            return Ok(seed.to_owned());
-        }
-    }
-    let seed = storage::generate_secret_b64();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, &seed)?;
-    Ok(seed)
-}
-
-async fn stop_pear(state: &AppState) {
-    *state.pear_gateway.write().await = None;
-    *state.pear_public_key.write().await = None;
-    if let Some(sidecar) = state.pear_sidecar.write().await.take() {
-        sidecar.shutdown().await;
-    }
-}
-
-/// Apply the routing policy immediately. Local-only is a hard privacy boundary:
-/// no Pear process remains alive after this function returns.
-pub async fn apply_pear_mode(state: &AppState, mode: SyncTransportMode) -> anyhow::Result<()> {
-    *state.transport_mode.write().await = mode;
-    if !mode.uses_pear() {
-        stop_pear(state).await;
-        state.peer_notify.notify_waiters();
-        return Ok(());
-    }
-    if state.pear_sidecar.read().await.is_some() {
-        state.peer_notify.notify_waiters();
-        return Ok(());
-    }
-
-    let seed = load_or_create_pear_seed(&state.pear_seed_path)?;
-    let sidecar =
-        PearSidecar::spawn(&state.pear_runtime_path, &state.pear_bundle_path, seed).await?;
-    let mut status = sidecar.status();
-    let ready = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            let current = status.borrow().clone();
-            match current {
-                PearSidecarStatus::Ready { public_key } => break Ok(public_key),
-                PearSidecarStatus::Failed { message } => anyhow::bail!(message),
-                PearSidecarStatus::Stopped => anyhow::bail!("Pear worker stopped during startup"),
-                PearSidecarStatus::Starting => status.changed().await?,
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("Pear worker startup timed out"))
-    .and_then(|result| result);
-    let public_key = match ready {
-        Ok(public_key) => public_key,
-        Err(error) => {
-            sidecar.shutdown().await;
-            return Err(error);
-        }
-    };
-    let port = state.settings.read().await.port;
-    let gateway = PearGateway::start(sidecar.clone(), format!("ws://127.0.0.1:{port}/sync"));
-    *state.pear_public_key.write().await = Some(public_key);
-    *state.pear_gateway.write().await = Some(gateway);
-    *state.pear_sidecar.write().await = Some(sidecar);
-    state.peer_notify.notify_waiters();
-    Ok(())
 }
 
 /// (Re-)announce this desktop over mDNS-SD using a privacy label derived from its
@@ -323,24 +239,6 @@ pub fn run() {
                 .join("ncy");
             std::fs::create_dir_all(&data_root)?;
             let paths = data_paths(data_root);
-            let pear_seed_path = paths.identity.with_file_name("pear-seed.txt");
-            let dev_sidecar =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ncy-core/pear-sidecar");
-            let resource_sidecar = app.path().resource_dir()?.join("pear-sidecar");
-            // Development must use the source sidecar directly. After moving to
-            // a workspace, `target/debug/pear-sidecar` can exist as a copied
-            // resource and Tauri may return it with a Windows verbatim path that
-            // Bare cannot convert to a file URL. Packaged builds use resources.
-            let sidecar_root = if cfg!(debug_assertions) && dev_sidecar.exists() {
-                dev_sidecar
-            } else if resource_sidecar.exists() {
-                resource_sidecar
-            } else {
-                dev_sidecar
-            };
-            let pear_runtime_path =
-                sidecar_root.join("node_modules/bare-runtime-win32-x64/bin/bare.exe");
-            let pear_bundle_path = sidecar_root.join("out/ncy-pear-sidecar.bundle");
 
             let settings = storage::settings::load(&paths.settings).unwrap_or_default();
             let desktop_prefs = commands::load_desktop_prefs(&paths.settings);
@@ -411,10 +309,6 @@ pub fn run() {
                 Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
             let pair_security = PairSecurityState::new(settings.discoverable);
             let pairings = Arc::new(RwLock::new(pairings));
-            let transport_mode = Arc::new(RwLock::new(settings.sync_transport_mode));
-            let pear_gateway = Arc::new(RwLock::new(None));
-            let pear_sidecar = Arc::new(RwLock::new(None));
-            let pear_public_key = Arc::new(RwLock::new(None));
 
             // Built once and retained in `AppState`, so flipping `syncServerEnabled`
             // back on can respawn the tasks without reopening stores or rebinding
@@ -455,8 +349,6 @@ pub fn run() {
                 blob_requests: blob_requests.clone(),
                 peers: peers.clone(),
                 peers_path: paths.peers.clone(),
-                transport_mode: transport_mode.clone(),
-                pear_gateway: pear_gateway.clone(),
             });
 
             let port = settings.port;
@@ -486,25 +378,12 @@ pub fn run() {
                 desktop_prefs: Arc::new(StdRwLock::new(desktop_prefs.clone())),
                 server_ctx,
                 peer_deps,
-                transport_mode,
-                pear_gateway,
-                pear_sidecar,
-                pear_public_key,
-                pear_runtime_path,
-                pear_bundle_path,
-                pear_seed_path,
                 sync_shutdown: std::sync::Mutex::new(None),
             };
 
             // Spawn the WS server + peer supervisor on the Tauri-managed Tokio
             // runtime. `update_desktop_prefs` can stop and restart them later.
             if sync_enabled {
-                if let Err(error) = tauri::async_runtime::block_on(apply_pear_mode(
-                    &state,
-                    settings.sync_transport_mode,
-                )) {
-                    tracing::error!(target: "ncy_pear", "start Pear transport: {error}");
-                }
                 let handle = spawn_sync(&state, port);
                 *state.sync_shutdown.lock().unwrap() = Some(handle);
             } else {
@@ -637,14 +516,10 @@ pub fn run() {
             if let RunEvent::ExitRequested { .. } = event {
                 if let Some(state) = app.try_state::<AppState>() {
                     // Window close (when not kept in the tray), tray Quit, and
-                    // programmatic exits all converge here. The Bare reader
-                    // tasks retain an Arc<PearSidecar>, so relying on
-                    // Child::kill_on_drop alone can orphan bare.exe.
+                    // programmatic exits all converge here. Stop sync cleanly so
+                    // the listener and peer connections close before exit.
                     tauri::async_runtime::block_on(async {
                         apply_sync_enabled(&state, false).await;
-                        // Also cover partial startup: Pear may have reached
-                        // Ready before the sync stack installed its handle.
-                        stop_pear(&state).await;
                     });
                 }
             }

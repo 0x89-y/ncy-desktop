@@ -15,13 +15,12 @@ use ncy_core::network::best_lan_ip;
 use ncy_core::storage::compaction;
 use ncy_core::storage::whisper::WhisperPaths;
 use ncy_core::storage::{
-    data_paths, generate_secret_b64, load_pairings, load_peers, DesktopIdentity, EventStore,
+    data_paths, load_pairings, load_peers, DesktopIdentity, EventStore,
     PairingFile,
 };
 use ncy_core::sync::{
     run_peer_supervisor, run_server, BlobStore, DesktopClock, MdnsRegistration, OutboundEvent,
-    PairSecurityState, PairingRegistry, PearGateway, PearSidecar, PearSidecarStatus, PeerSyncDeps,
-    ServerContext, SyncEvent,
+    PairSecurityState, PairingRegistry, PeerSyncDeps, ServerContext, SyncEvent,
 };
 
 use crate::config::Config;
@@ -46,8 +45,6 @@ pub async fn run(config: Config) -> Result<()> {
     let pairings = Arc::new(RwLock::new(pairings));
     let peers = Arc::new(RwLock::new(load_peers(&paths.peers).unwrap_or_default()));
     let peer_notify = Arc::new(Notify::new());
-    let transport_mode = Arc::new(RwLock::new(config.sync_transport_mode));
-    let pear_gateway = Arc::new(RwLock::new(None));
 
     let events = Arc::new(EventStore::open(&paths.events)?);
     if let Err(e) = compaction::run_if_needed(&events) {
@@ -86,26 +83,6 @@ pub async fn run(config: Config) -> Result<()> {
 
     let server_status = Arc::new(RwLock::new("starting"));
     let server_addr = Arc::new(RwLock::new(None::<String>));
-
-    // Pear is an explicit opt-in. Its seed is installation-local and stable so
-    // pairing payloads keep the same public key across daemon restarts.
-    let pear_sidecar = if config.sync_transport_mode.uses_pear() {
-        let (runtime, bundle) = config.pear_paths()?;
-        let seed_path = paths.root.join("pear-seed.txt");
-        let seed = load_or_create_pear_seed(&seed_path)?;
-        let sidecar = PearSidecar::spawn(runtime, bundle, seed).await?;
-        let public_key = wait_for_pear_ready(&sidecar).await?;
-        std::fs::write(paths.root.join("pear-public-key.txt"), &public_key)?;
-        *pear_gateway.write().await = Some(PearGateway::start(
-            sidecar.clone(),
-            format!("ws://127.0.0.1:{}/sync", config.port),
-        ));
-        tracing::info!(target: "ncy_pear", public_key, "Pear transport ready");
-        Some(sidecar)
-    } else {
-        tracing::info!(target: "ncy_pear", "Pear transport disabled (localOnly)");
-        None
-    };
 
     // --- WebSocket sync server (server role: phones + inbound desktops dial in) ---
     {
@@ -172,8 +149,6 @@ pub async fn run(config: Config) -> Result<()> {
             blob_requests: blob_requests.clone(),
             peers: peers.clone(),
             peers_path: paths.peers.clone(),
-            transport_mode,
-            pear_gateway,
         });
         let peer_notify_for_sup = peer_notify.clone();
         tokio::spawn(async move {
@@ -212,63 +187,8 @@ pub async fn run(config: Config) -> Result<()> {
     tracing::info!("ncy-server up. Type 'help' for commands; Ctrl-C to stop.");
     wait_for_shutdown(&config, pairings, &paths.pairings, blob_requests).await;
     tracing::info!("shutting down");
-    if let Some(sidecar) = pear_sidecar {
-        sidecar.shutdown().await;
-    }
     drop(mdns); // unregister the mDNS service explicitly before exit
     Ok(())
-}
-
-fn load_or_create_pear_seed(path: &std::path::Path) -> Result<String> {
-    if let Ok(seed) = std::fs::read_to_string(path) {
-        let seed = seed.trim();
-        if !seed.is_empty() {
-            return Ok(seed.to_owned());
-        }
-    }
-    let seed = generate_secret_b64();
-    write_private_seed(path, seed.as_bytes())?;
-    Ok(seed)
-}
-
-fn write_private_seed(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
-}
-
-async fn wait_for_pear_ready(sidecar: &Arc<PearSidecar>) -> Result<String> {
-    let mut status = sidecar.status();
-    let ready = tokio::time::timeout(std::time::Duration::from_secs(20), async {
-        loop {
-            let current = status.borrow().clone();
-            match current {
-                PearSidecarStatus::Ready { public_key } => break Ok(public_key),
-                PearSidecarStatus::Failed { message } => anyhow::bail!(message),
-                PearSidecarStatus::Stopped => anyhow::bail!("Pear worker stopped during startup"),
-                PearSidecarStatus::Starting => status.changed().await?,
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow::anyhow!("Pear worker startup timed out"))
-    .and_then(|result| result);
-    match ready {
-        Ok(public_key) => Ok(public_key),
-        Err(error) => {
-            sidecar.shutdown().await;
-            Err(error)
-        }
-    }
 }
 
 /// Largest HLC across every chat log on disk — seeds the clock so a fresh process

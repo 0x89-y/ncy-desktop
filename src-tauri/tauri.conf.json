@@ -31,12 +31,6 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "resources": {
-      "../../ncy-core/pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe": "pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe",
-      "../../ncy-core/pear-sidecar/out/ncy-pear-sidecar.bundle": "pear-sidecar/out/ncy-pear-sidecar.bundle",
-      "../../ncy-core/pear-sidecar/out/node_modules": "pear-sidecar/out/node_modules",
-      "../../ncy-core/pear-sidecar/THIRD_PARTY_NOTICES.md": "pear-sidecar/THIRD_PARTY_NOTICES.md"
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -52,7 +46,7 @@
   },
   "plugins": {
     "updater": {
-      "endpoints": ["https://0x89-y.xyz/ncy/latest.json"],
+      "endpoints": ["https://github.com/0x89-y/ncy-desktop/releases/latest/download/latest.json"],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVCQjNDOTM3Rjk0Qjc5OApSV1NZdDVSL2t6eTdEb0VNT2R5endYU2xUVGJXRHVWY0VxbVhESXVBZENZcklZZThUTFNXeVVpSwo="
     }
   }

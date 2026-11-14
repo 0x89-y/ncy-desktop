@@ -1,0 +1,125 @@
+name: Release
+
+# Builds the signed Windows installer and stages it as a DRAFT GitHub release,
+# together with the updater's latest.json. Installed copies only see it once the
+# draft is published: the updater reads releases/latest/download/latest.json,
+# and drafts are not "latest".
+#
+# Trigger: push a tag matching the app version (git tag v0.7.5; git push origin
+# v0.7.5), or run it by hand from the Actions tab.
+#
+# Secrets:
+#   TAURI_SIGNING_PRIVATE_KEY           contents of %USERPROFILE%\.ncy\ncy-updater.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password (leave unset if it has none)
+#   NCY_CORE_TOKEN                      optional, read access to 0x89-y/ncy-core,
+#                                       only needed while that repo is private
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: "ncy-core branch, tag or commit to build against (blank = default branch)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: ncy-desktop
+    steps:
+      # Same sibling layout as local dev: ncy-desktop/ next to ncy-core/, so the
+      # ../../ncy-core path dependency and bundle resources resolve unchanged.
+      - uses: actions/checkout@v4
+        with:
+          path: ncy-desktop
+      - uses: actions/checkout@v4
+        with:
+          repository: 0x89-y/ncy-core
+          ref: ${{ inputs.core_ref }}
+          path: ncy-core
+          token: ${{ secrets.NCY_CORE_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ncy-desktop/package-lock.json
+
+      - name: Check version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VER=$(node scripts/release.mjs version "${GITHUB_REF_NAME}")
+          else
+            VER=$(node scripts/release.mjs version)
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "core_sha=$(git -C ../ncy-core rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ncy-desktop -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fast gate: type check plus unit tests, which include the in-app
+      # changelog drift check.
+      - name: Check frontend
+        run: |
+          npm run check
+          npm test
+
+      - name: Build installer
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set"
+            exit 1
+          fi
+          npm run tauri build -- --bundles nsis
+
+      - name: Stage release files
+        env:
+          VER: ${{ steps.version.outputs.version }}
+        run: |
+          BUNDLE="target/release/bundle/nsis"
+          mkdir -p release
+          cp "$BUNDLE/Ncy_${VER}_x64-setup.exe" release/Ncy-windows-x64-setup.exe
+          node scripts/release.mjs manifest "$BUNDLE/Ncy_${VER}_x64-setup.exe.sig" release/latest.json
+          node scripts/release.mjs notes release/notes.md
+          printf '\n---\nBuilt from ncy-desktop %s with ncy-core %s.\n' \
+            "${GITHUB_SHA::7}" "${{ steps.version.outputs.core_sha }}" >> release/notes.md
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ steps.version.outputs.version }}
+          VER: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/Ncy-windows-x64-setup.exe release/latest.json --clobber
+            gh release edit "$TAG" --notes-file release/notes.md
+          else
+            gh release create "$TAG" release/Ncy-windows-x64-setup.exe release/latest.json \
+              --draft --target "$GITHUB_SHA" --title "Ncy $VER" --notes-file release/notes.md
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ncy-${{ steps.version.outputs.version }}-windows-x64
+          path: ncy-desktop/release/

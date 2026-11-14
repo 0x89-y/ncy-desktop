@@ -10,7 +10,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use ncy_core::sync::SyncTransportMode;
 use serde::Deserialize;
 
 /// Parsed `config.toml`. Every field has a default so a minimal file (even an
@@ -36,14 +35,8 @@ pub struct Config {
     /// Master switch for the auto-transcription loop. Even when true, the loop
     /// only runs if `whisper-cli` and the model are actually present.
     pub transcription_enabled: bool,
-    /// Connection routing policy. `localOnly` is the default and never starts
-    /// the Pear worker.
-    pub sync_transport_mode: SyncTransportMode,
     /// Generic files above this size remain metadata-only on this server.
     pub automatic_file_download_limit_mb: u64,
-    /// Bare runtime and bundled Ncy Pear worker. Required for Pear-enabled modes.
-    pub pear_runtime_path: Option<PathBuf>,
-    pub pear_bundle_path: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -55,10 +48,7 @@ impl Default for Config {
             whisper_dir: None,
             discoverable: false,
             transcription_enabled: false,
-            sync_transport_mode: SyncTransportMode::LocalOnly,
             automatic_file_download_limit_mb: 100,
-            pear_runtime_path: None,
-            pear_bundle_path: None,
         }
     }
 }
@@ -81,16 +71,6 @@ impl Config {
         self.whisper_dir
             .clone()
             .unwrap_or_else(|| self.data_dir.join("whisper"))
-    }
-
-    pub fn pear_paths(&self) -> Result<(&Path, &Path)> {
-        let runtime = self.pear_runtime_path.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("pear_runtime_path is required when Pear transport is enabled")
-        })?;
-        let bundle = self.pear_bundle_path.as_deref().ok_or_else(|| {
-            anyhow::anyhow!("pear_bundle_path is required when Pear transport is enabled")
-        })?;
-        Ok((runtime, bundle))
     }
 
     /// Default config-file location, mirroring the TODO's design: a system path on
@@ -137,20 +117,14 @@ fn appdata_dir() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(PathBuf::from)
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::Config;
-    use ncy_core::sync::SyncTransportMode;
 
     #[test]
-    fn pear_is_off_by_default() {
-        let config: Config = toml::from_str("").unwrap();
-        assert_eq!(config.sync_transport_mode, SyncTransportMode::LocalOnly);
-        assert!(config.pear_runtime_path.is_none());
-    }
-
-    #[test]
-    fn parses_pear_policy_and_artifact_paths() {
+    fn ignores_removed_pear_settings() {
+        // Configs written before Pear was removed must still load.
         let config: Config = toml::from_str(
             r#"
 sync_transport_mode = "pearPreferred"
@@ -159,7 +133,6 @@ pear_bundle_path = "/opt/ncy/ncy-pear-sidecar.bundle"
 "#,
         )
         .unwrap();
-        assert_eq!(config.sync_transport_mode, SyncTransportMode::PearPreferred);
-        assert!(config.pear_paths().is_ok());
+        assert_eq!(config.port, 8765);
     }
 }

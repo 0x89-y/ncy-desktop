@@ -63,10 +63,8 @@ enum Command {
     },
 }
 
-/// Run the server command line. `args` excludes the executable name. A desktop
-/// distribution can supply its bundled Bare runtime and worker as defaults;
-/// explicit paths in config.toml always win.
-pub fn run(args: &[String], bundled_pear: Option<(PathBuf, PathBuf)>) -> Result<()> {
+/// Run the server command line. `args` excludes the executable name.
+pub fn run(args: &[String]) -> Result<()> {
     init_tracing();
     let cli =
         Cli::try_parse_from(std::iter::once("ncy-server").chain(args.iter().map(String::as_str)))?;
@@ -74,19 +72,15 @@ pub fn run(args: &[String], bundled_pear: Option<(PathBuf, PathBuf)>) -> Result<
         .enable_all()
         .build()
         .context("create server async runtime")?;
-    runtime.block_on(run_async(cli, bundled_pear))
+    runtime.block_on(run_async(cli))
 }
 
-async fn run_async(cli: Cli, bundled_pear: Option<(PathBuf, PathBuf)>) -> Result<()> {
+async fn run_async(cli: Cli) -> Result<()> {
     let config_path = cli
         .config
         .clone()
         .unwrap_or_else(Config::default_config_path);
-    let mut config = load_config(&config_path)?;
-    if let Some((runtime, bundle)) = bundled_pear {
-        config.pear_runtime_path.get_or_insert(runtime);
-        config.pear_bundle_path.get_or_insert(bundle);
-    }
+    let config = load_config(&config_path)?;
 
     match cli.command.unwrap_or(Command::Run) {
         Command::Run => daemon::run(config).await,

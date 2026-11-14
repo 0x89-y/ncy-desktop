@@ -13,8 +13,7 @@ with the phone and desktop.
 
 The server can run either as the standalone `ncy-server` binary or through an
 Ncy Desktop installation with `ncy-desktop server` / `ncy-desktop --server`.
-Both entry points use this same implementation and configuration format; Desktop
-only supplies its packaged Pear artifacts as defaults when config paths are omitted.
+Both entry points use this same implementation and configuration format.
 
 ## What it does
 
@@ -122,27 +121,6 @@ device ID. If a paired client stays offline, use a private LAN/hotspot or ask th
 network administrator to permit direct traffic and multicast. Disabling
 `discoverable` stops mDNS advertising but also prevents automatic recovery after a
 LAN address change.
-
-## Pear sync (optional)
-
-Pear is off by default. To connect already-paired devices across different
-networks, set `sync_transport_mode` to `pearOnly`, `localPreferred`, or
-`pearPreferred`, and configure `pear_runtime_path` plus `pear_bundle_path` as
-shown in `config.example.toml`. `localOnly` never launches the Pear process.
-
-Start the daemon once so it creates its stable Pear identity, then run
-`ncy-server pair`. The generated QR/JSON includes `pearPublicKey`. Pear does not
-discover or authorize unknown Ncy devices; the existing QR/JSON pairing secret
-still controls access and protects the Ncy sync session.
-
-Keep the bundle's adjacent `out/node_modules` directory with it, since the
-packaged worker loads its native addons there. Changing or deleting
-`<data_dir>/pear-seed.txt` changes the server's Pear identity and requires new
-pairing payloads.
-
-Distributions must also include the repository's `THIRD_PARTY_NOTICES_PEAR.md`, generated
-with `npm run notices` in ncy-core's `pear-sidecar` directory. It contains a production
-dependency inventory and the license and notice texts supplied by the bundled packages.
 
 ## Run
 

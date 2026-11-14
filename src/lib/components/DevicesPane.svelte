@@ -14,15 +14,6 @@
   import { X } from "@lucide/svelte";
   import { onMount } from "svelte";
 
-  let { connectionMode }: { connectionMode: "localOnly" | "pearOnly" | "localPreferred" | "pearPreferred";
-  } = $props();
-
-  function connectedLabel(): string {
-    if (connectionMode === "localOnly") return "Connected locally";
-    if (connectionMode === "pearOnly") return "Connected via Pear";
-    return "Connected";
-  }
-
   let busy = $state(false);
   let copyHint = $state<string | null>(null);
   let showManualPairing = $state(false);
@@ -286,7 +277,7 @@
                 <span
                   class="dot"
                   class:paired={online}
-                  title={online ? connectedLabel() : "Waiting to connect"}
+                  title={online ? "Connected" : "Waiting to connect"}
                 ></span>
                 <strong>{p.label}</strong>
               </div>
@@ -334,7 +325,7 @@
             </div>
             <div class="row" style="gap:.3rem">
               <span class="chip" class:active={online}>
-                {!p.enabled ? "Paused" : online ? connectedLabel() : $peerErrors[p.id] ? "Connection error" : "Waiting to connect"}
+                {!p.enabled ? "Paused" : online ? "Connected" : $peerErrors[p.id] ? "Connection error" : "Waiting to connect"}
               </span>
               <button
                 class="ghost compact"

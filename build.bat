@@ -33,17 +33,6 @@ rem Tauri's build script caches the exe/window icon and misses icon-only
 rem changes, so bump tauri.conf.json's timestamp to force the icon to re-embed.
 powershell -NoProfile -Command "(Get-Item 'src-tauri\tauri.conf.json').LastWriteTime = Get-Date" >nul 2>&1
 
-rem Rebuild the packaged Windows x64 Pear worker before Tauri collects its
-rem runtime, bundle, and native addons as release resources.
-call npm run pear:build
-if not "%ERRORLEVEL%"=="0" (
-    echo PEAR WORKER BUILD FAILED
-    echo Fully exit Ncy Dev, including its tray process, before rebuilding.
-    echo If dependencies are missing, run npm ci in ..\ncy-core\pear-sidecar.
-    pause
-    exit /b 1
-)
-
 call npm run tauri build -- --bundles nsis
 set "ERR=%ERRORLEVEL%"
 
@@ -61,8 +50,9 @@ echo   Installer:   target\release\bundle\nsis\
 echo   Signature:   target\release\bundle\nsis\*-setup.exe.sig
 echo   Standalone:  target\release\ncy-desktop.exe
 echo.
-echo   To publish an update: run publish-release.bat, then upload the staged
-echo   release\ folder to https://0x89-y.xyz/ncy/ .
+echo   Releases are normally built by the GitHub "Release" workflow (push a
+echo   v^<version^> tag). To publish this local build instead, run
+echo   publish-release.bat and attach the staged files to a GitHub release.
 echo.
 
 rem Open the installer folder in Explorer

@@ -2,8 +2,7 @@
 
 Desktop client for [Ncy](https://github.com/0x89-y/ncy-android), the Android "note-to-self"
 chat app. Implements the full Ncy sync protocol — **bidirectional**, near-real-time,
-peer-to-peer over LAN WebSockets or the optional Pear transport, with the same
-authenticated and encrypted Ncy sync protocol on either route.
+peer-to-peer over authenticated, encrypted LAN WebSockets.
 
 Stack: **Tauri 2** (Rust backend) + **Svelte 5** + **TypeScript** (web frontend).
 
@@ -12,8 +11,7 @@ Stack: **Tauri 2** (Rust backend) + **Svelte 5** + **TypeScript** (web frontend)
 - Node.js 18+ and npm
 - Rust stable + WebView2 (the Windows Tauri dependency, preinstalled on Win10/11),
   per the Tauri docs: <https://v2.tauri.app/start/prerequisites/>
-- A sibling `../ncy-core` checkout with `pear-sidecar` dependencies installed:
-  `npm ci --prefix ../ncy-core/pear-sidecar`
+- A sibling `../ncy-core` checkout (path dependency)
 
 **Platform support:** built and tested on **Windows** only. The codebase is
 platform-portable (Tauri 2, no platform-specific code), so it *should* build on
@@ -45,7 +43,7 @@ ncy-desktop.exe client pair create --name "My phone"
 ncy-desktop.exe client pair add --file pairing.json
 ```
 
-`run` stays in the foreground until Ctrl+C. `sync` runs the normal local/Pear
+`run` stays in the foreground until Ctrl+C. `sync` runs the normal
 client stack for a bounded window (15 seconds by default), while `status` and
 `peers` only inspect the profile. Pairing JSON printed by `pair create` can be
 turned into a QR code or imported directly on another Ncy device.
@@ -72,9 +70,7 @@ ncy-desktop.exe server --config C:\path\to\config.toml peers
 Server mode retains the standalone server's config format and defaults to
 `%APPDATA%\ncy-server\config.toml` with runtime data under
 `%APPDATA%\ncy-server\data`. It therefore has a separate identity and store from
-the GUI/CLI client. In an installed desktop build, Pear-enabled server configs
-may omit `pear_runtime_path` and `pear_bundle_path`; the packaged, version-matched
-runtime is used automatically. Explicit config paths continue to override it.
+the GUI/CLI client.
 While server mode is running interactively, type `help` in that same terminal.
 Commands include `pair My Phone`, `pairings`, `peers`, `rotate <id>`,
 `revoke <id>`, and `stop`; pairing changes become active without restarting.
@@ -92,7 +88,37 @@ Keep `ncy-updater.key` private and backed up — losing it means existing instal
 can never be updated again, since they only trust its public half (baked into
 `tauri.conf.json` as `plugins.updater.pubkey`).
 
-Then, from the project root:
+### GitHub release (normal path)
+
+The [Release workflow](.github/workflows/release.yml) builds the signed installer on
+`windows-latest` and stages a **draft** GitHub release holding
+`Ncy-windows-x64-setup.exe`, `latest.json` and the CHANGELOG.md section as the body.
+It checks out `0x89-y/ncy-core` next to this repo, the same sibling layout as local dev.
+
+One-time setup, under the repo's Settings → Secrets and variables → Actions:
+
+- `TAURI_SIGNING_PRIVATE_KEY`: the contents of `ncy-updater.key`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password (skip if it has none)
+- `NCY_CORE_TOKEN`: only while `ncy-core` is private, a fine-grained token with
+  read access to its contents
+
+To release:
+
+1. Bump the version in `package.json`, `src-tauri/Cargo.toml` and
+   `src-tauri/tauri.conf.json` together, add the `CHANGELOG.md` section and the
+   `src/lib/changelog.ts` entry, and commit.
+2. `git tag v<version>` and `git push origin v<version>`. The workflow refuses a tag
+   that doesn't match the app version.
+3. Check the draft on GitHub, then publish it. Only then do installed copies see it.
+
+The updater reads `releases/latest/download/latest.json`, which always resolves to
+the newest published, non-prerelease release. The workflow can also be run by hand
+from the Actions tab, optionally against a specific `ncy-core` ref; rerunning it for
+the same version replaces the draft's files.
+
+### Local build (fallback)
+
+From the project root:
 
 ```bat
 build.bat            :: NSIS installer + .sig  (prompts for the key password)
@@ -104,21 +130,16 @@ publish-release.bat  :: stages release\ with the installer + latest.json
 - `ncy-desktop.exe` — standalone binary (needs WebView2, preinstalled on Win10/11)
 - `bundle/nsis/Ncy_<version>_x64-setup.exe` — installer, plus its `.sig`
 
-The release build first regenerates the Pear worker, then bundles only the Windows x64
-Bare runtime, worker bundle, and required Windows x64 native addons. NSIS uses LZMA
-compression. It also regenerates and packages `pear-sidecar/THIRD_PARTY_NOTICES.md` from
-the locked production dependency tree. Development builds continue to resolve the same
-sibling checkout directly.
+NSIS uses LZMA compression.
 
-`publish-release.bat` renames the installer to the stable URL the updater points
-at and writes `latest.json` with the signature already inlined. Upload both files
-from `release/` to <https://0x89-y.xyz/ncy/>. Installed copies pick the update up
-on their next check (startup, then every 3 hours), or immediately via
+`publish-release.bat` renames the installer to the stable asset name and writes
+`latest.json` with the signature already inlined. Attach both files from `release/`
+to a GitHub release tagged `v<version>`. Installed copies pick the update up on
+their next check (startup, then every 3 hours), or immediately via
 **Settings → About → Check now**.
 
-Bump the version in `package.json`, `src-tauri/Cargo.toml` and
-`src-tauri/tauri.conf.json` together, and add an entry to `src/lib/changelog.ts`
-— that's what Settings → About renders.
+Bump the version in all three files the same way as above; `src/lib/changelog.ts`
+is what Settings → About renders.
 
 `npm run tauri:build` still works for an unsigned local build, but the resulting
 installer can't be published as an update.

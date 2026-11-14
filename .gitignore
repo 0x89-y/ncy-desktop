@@ -34,7 +34,7 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 
-# Release staging (installer + latest.json, uploaded to 0x89-y.xyz/ncy/)
+# Release staging (installer + latest.json, attached to a GitHub release)
 release/
 
 # Local scratch

@@ -35,17 +35,7 @@ discoverable = false
 # otherwise the server logs a warning and runs as a pure relay.
 transcription_enabled = false
 
-# Sync transport policy: "localOnly" (default), "pearOnly",
-# "localPreferred", or "pearPreferred". Pear connects only devices that were
-# already paired via QR/JSON; it does not discover unknown Ncy devices.
-sync_transport_mode = "localOnly"
-
 # Generic attachments larger than this remain metadata-only until manually requested.
 # 0 means always ask; the current hard safety ceiling is 1024 MB.
 automatic_file_download_limit_mb = 100
 
-# Required only when a Pear-enabled policy is selected. Point these at the
-# packaged Bare runtime and Ncy Pear bundle. Keep the bundle's adjacent
-# out/node_modules directory intact because it contains native addons.
-# pear_runtime_path = "C:/ncy-server/pear-sidecar/node_modules/bare-runtime-win32-x64/bin/bare.exe"
-# pear_bundle_path = "C:/ncy-server/pear-sidecar/out/ncy-pear-sidecar.bundle"

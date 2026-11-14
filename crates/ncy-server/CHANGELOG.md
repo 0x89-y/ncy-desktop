@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- Removed Pear sync. The server syncs over the local network only, pairing payloads no
+  longer carry `pearPublicKey`, and `THIRD_PARTY_NOTICES_PEAR.md` is gone. Existing
+  configs that still set `sync_transport_mode`, `pear_runtime_path` or
+  `pear_bundle_path` load as before; those keys are ignored.
+
 ## 0.7.4 — 2026-10-20
 
 ### Added

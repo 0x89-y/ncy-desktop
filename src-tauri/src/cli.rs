@@ -11,10 +11,9 @@ use crate::storage::{
     self, data_paths, load_pairings, load_peers, save_pairings, save_peers, DesktopIdentity,
     EventStore, OutboundPeer, Pairing,
 };
-use crate::sync::pear::valid_public_key;
 use crate::sync::{
-    BlobStore, DesktopClock, OutboundEvent, PairSecurityState, PairingRegistry, PearGateway,
-    PearSidecar, PeerSyncDeps, ProtectionKeyStore, ServerContext, SyncEvent,
+    BlobStore, DesktopClock, OutboundEvent, PairSecurityState, PairingRegistry, PeerSyncDeps,
+    ProtectionKeyStore, ServerContext, SyncEvent,
 };
 use crate::{apply_sync_enabled, max_stored_hlc, network, AppState};
 
@@ -96,30 +95,10 @@ fn data_root() -> Result<PathBuf> {
     }
 }
 
-fn sidecar_root() -> Result<PathBuf> {
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ncy-core/pear-sidecar");
-    if development.exists() {
-        return Ok(development);
-    }
-    let executable = std::env::current_exe().context("locate Ncy executable")?;
-    Ok(executable
-        .parent()
-        .context("Ncy executable has no parent directory")?
-        .join("pear-sidecar"))
-}
-
 fn build_state() -> Result<AppState> {
     let root = data_root()?;
     std::fs::create_dir_all(&root)?;
     let paths = data_paths(root);
-    let sidecar = sidecar_root()?;
-    let pear_runtime_path = if cfg!(target_os = "windows") {
-        sidecar.join("node_modules/bare-runtime-win32-x64/bin/bare.exe")
-    } else {
-        sidecar.join("node_modules/.bin/bare")
-    };
-    let pear_bundle_path = sidecar.join("out/ncy-pear-sidecar.bundle");
-    let pear_seed_path = paths.identity.with_file_name("pear-seed.txt");
     let settings = storage::settings::load(&paths.settings).unwrap_or_default();
     let desktop_prefs = commands::load_desktop_prefs(&paths.settings);
     let identity = DesktopIdentity::load_or_create(&paths.identity, &settings.device_name)?;
@@ -146,9 +125,6 @@ fn build_state() -> Result<AppState> {
     let pairing_registry: PairingRegistry =
         Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
     let pair_security = PairSecurityState::new(settings.discoverable);
-    let transport_mode = Arc::new(RwLock::new(settings.sync_transport_mode));
-    let pear_gateway = Arc::new(RwLock::new(None::<Arc<PearGateway>>));
-    let pear_sidecar = Arc::new(RwLock::new(None::<Arc<PearSidecar>>));
 
     let server_ctx = Arc::new(ServerContext {
         identity_device_id: identity.device_id.clone(),
@@ -186,8 +162,6 @@ fn build_state() -> Result<AppState> {
         blob_requests: blob_requests.clone(),
         peers: peers.clone(),
         peers_path: paths.peers.clone(),
-        transport_mode: transport_mode.clone(),
-        pear_gateway: pear_gateway.clone(),
     });
 
     Ok(AppState {
@@ -216,13 +190,6 @@ fn build_state() -> Result<AppState> {
         desktop_prefs: Arc::new(StdRwLock::new(desktop_prefs)),
         server_ctx,
         peer_deps,
-        transport_mode,
-        pear_gateway,
-        pear_sidecar,
-        pear_public_key: Arc::new(RwLock::new(None)),
-        pear_runtime_path,
-        pear_bundle_path,
-        pear_seed_path,
         sync_shutdown: std::sync::Mutex::new(None),
     })
 }
@@ -231,8 +198,8 @@ async fn start(state: &AppState) {
     apply_sync_enabled(state, true).await;
     let settings = state.settings.read().await;
     println!(
-        "Ncy client running as {} on port {} ({:?})",
-        settings.device_name, settings.port, settings.sync_transport_mode
+        "Ncy client running as {} on port {}",
+        settings.device_name, settings.port
     );
 }
 
@@ -275,7 +242,6 @@ async fn print_status(state: &AppState) -> Result<()> {
         "Device: {} ({})",
         settings.device_name, state.identity_device_id
     );
-    println!("Transport: {:?}", settings.sync_transport_mode);
     println!("Port: {}", settings.port);
     println!(
         "Peers: {} ({} enabled)",
@@ -294,13 +260,8 @@ async fn print_peers(state: &AppState) -> Result<()> {
         return Ok(());
     }
     for peer in &peers.peers {
-        let route = if peer.pear_public_key.is_some() {
-            "Pear/LAN"
-        } else {
-            "LAN"
-        };
         println!(
-            "{}\t{}\t{}\t{}:{}\tlast seen: {}\t{}",
+            "{}\t{}\t{}\t{}:{}\tlast seen: {}",
             peer.id,
             peer.label,
             if peer.disabled { "disabled" } else { "enabled" },
@@ -309,7 +270,6 @@ async fn print_peers(state: &AppState) -> Result<()> {
             peer.last_seen_at
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "never".into()),
-            route
         );
     }
     Ok(())
@@ -334,9 +294,6 @@ fn option_value<'a>(args: &'a [String], option: &str) -> Option<&'a str> {
 
 async fn create_pairing(state: &AppState, label: &str) -> Result<()> {
     let settings = state.settings.read().await.clone();
-    if settings.sync_transport_mode.uses_pear() {
-        crate::apply_pear_mode(state, settings.sync_transport_mode).await?;
-    }
     let pairing = Pairing::new_with_label(label.to_owned());
     {
         let mut pairings = state.pairings.write().await;
@@ -350,10 +307,8 @@ async fn create_pairing(state: &AppState, label: &str) -> Result<()> {
         host: state.advertised_host.read().await.clone(),
         port: settings.port,
         secret: pairing.secret_b64,
-        pear_public_key: state.pear_public_key.read().await.clone(),
     };
     println!("{}", serde_json::to_string_pretty(&payload)?);
-    crate::apply_pear_mode(state, crate::sync::SyncTransportMode::LocalOnly).await?;
     Ok(())
 }
 
@@ -367,8 +322,6 @@ struct IncomingPairing {
     host: String,
     port: u16,
     secret: String,
-    #[serde(default, rename = "pearPublicKey")]
-    pear_public_key: Option<String>,
     #[serde(default)]
     availability: Option<String>,
 }
@@ -389,15 +342,8 @@ async fn add_pairing(state: &AppState, args: &[String]) -> Result<()> {
     if incoming.secret.trim().is_empty() {
         bail!("pairing JSON is missing its secret");
     }
-    if incoming
-        .pear_public_key
-        .as_deref()
-        .is_some_and(|key| !valid_public_key(key))
-    {
-        bail!("pairing JSON contains an invalid Pear public key");
-    }
-    if incoming.host.trim().is_empty() && incoming.pear_public_key.is_none() {
-        bail!("pairing JSON has neither a LAN endpoint nor a Pear public key");
+    if incoming.host.trim().is_empty() || incoming.port == 0 {
+        bail!("pairing JSON has no LAN endpoint");
     }
     let mut peers = state.peers.write().await;
     if peers.peers.iter().any(|peer| peer.id == incoming.device_id) {
@@ -414,7 +360,6 @@ async fn add_pairing(state: &AppState, args: &[String]) -> Result<()> {
         authenticated_name: (!incoming.name.trim().is_empty()).then_some(incoming.name),
         host: incoming.host,
         port: incoming.port,
-        pear_public_key: incoming.pear_public_key,
         availability: incoming.availability,
         disabled: false,
         secret_b64: incoming.secret,

@@ -12,7 +12,6 @@ use crate::storage::{
     materialize, now_ms, reset_sync_watermarks, save_pairings, save_peers, AppSettings, EventStore,
     MaterializedChat, OutboundPeer, Pairing,
 };
-use crate::sync::pear::valid_public_key;
 use crate::sync::{author_event, author_event_with_profile, SyncEvent};
 use crate::AppState;
 
@@ -255,8 +254,6 @@ pub struct PairingPayload {
     pub host: String,
     pub port: u16,
     pub secret: String,
-    #[serde(rename = "pearPublicKey", skip_serializing_if = "Option::is_none")]
-    pub pear_public_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -392,23 +389,6 @@ pub async fn lock_chat(state: State<'_, AppState>, chat_id: String) -> Result<()
 
 #[tauri::command]
 pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDescriptor>, String> {
-    let has_unused_invitation = state
-        .pairings
-        .read()
-        .await
-        .pairings
-        .iter()
-        .any(|pairing| pairing.phone_id.is_none());
-    let pear_public_key = if has_unused_invitation {
-        let mode = state.settings.read().await.sync_transport_mode;
-        let key = state.pear_public_key.read().await.clone();
-        if mode.uses_pear() && key.is_none() {
-            return Err("Pear is not ready to display this pairing invitation".to_string());
-        }
-        key
-    } else {
-        None
-    };
     let pairings = state.pairings.read().await;
     let settings = state.settings.read().await.clone();
     let identity_device_id = state.identity_device_id.clone();
@@ -424,7 +404,6 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
                 host: host.clone(),
                 port: settings.port,
                 secret: pairing.secret_b64.clone(),
-                pear_public_key: pear_public_key.clone(),
             };
             let payload_json = serde_json::to_string(&payload).unwrap_or_default();
             let qr_svg = make_qr_svg(&payload_json);
@@ -440,32 +419,6 @@ pub async fn list_pairings(state: State<'_, AppState>) -> Result<Vec<PairingDesc
     }
     Ok(out)
 }
-/// A Pear-capable pairing must never silently degrade to a LAN-only payload.
-/// Retry startup here so a transient sidecar failure at application launch can
-/// recover when the user actually opens or creates a pairing invitation.
-async fn pairing_pear_public_key(state: &AppState) -> Result<Option<String>, String> {
-    let mode = state.settings.read().await.sync_transport_mode;
-    if !mode.uses_pear() {
-        return Ok(None);
-    }
-    if state.sync_shutdown.lock().unwrap().is_none() {
-        return Err("Pear pairing requires device sync to be enabled".to_string());
-    }
-    if let Some(public_key) = state.pear_public_key.read().await.clone() {
-        return Ok(Some(public_key));
-    }
-    crate::apply_pear_mode(state, mode)
-        .await
-        .map_err(|error| format!("Pear is not ready: {error}"))?;
-    state
-        .pear_public_key
-        .read()
-        .await
-        .clone()
-        .map(Some)
-        .ok_or_else(|| "Pear started without providing a public key".to_string())
-}
-
 /// Record that this device has joined a mesh, so media predating the moment is
 /// listed rather than downloaded.
 ///
@@ -507,7 +460,6 @@ pub async fn create_pairing(
     label: String,
 ) -> Result<PairingDescriptor, String> {
     stamp_media_backfill_cutoff(&state).await;
-    let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairing = Pairing::new_with_label(label);
     {
         let mut guard = state.pairings.write().await;
@@ -523,7 +475,6 @@ pub async fn create_pairing(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
-        pear_public_key,
     };
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     let qr_svg = make_qr_svg(&payload_json);
@@ -546,7 +497,6 @@ pub async fn replace_pairing(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<PairingDescriptor, String> {
-    let pear_public_key = pairing_pear_public_key(&state).await?;
     let pairing = {
         let mut guard = state.pairings.write().await;
         let pairing = guard
@@ -571,7 +521,6 @@ pub async fn replace_pairing(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
-        pear_public_key,
     };
     let payload_json = serde_json::to_string(&payload).unwrap_or_default();
     Ok(PairingDescriptor {
@@ -596,7 +545,6 @@ pub async fn pair_accept(
     label: String,
 ) -> Result<(), String> {
     stamp_media_backfill_cutoff(&state).await;
-    let pear_public_key = pairing_pear_public_key(&state).await?;
     let session = {
         let mut reg = state.pairing_registry.lock().await;
         reg.remove(&session_id)
@@ -625,7 +573,6 @@ pub async fn pair_accept(
         host,
         port: settings.port,
         secret: pairing.secret_b64.clone(),
-        pear_public_key,
     };
     let pairing_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
@@ -675,8 +622,6 @@ struct IncomingPairing {
     host: String,
     port: u16,
     secret: String,
-    #[serde(default, rename = "pearPublicKey")]
-    pear_public_key: Option<String>,
     #[serde(default)]
     availability: Option<String>,
 }
@@ -689,8 +634,6 @@ pub struct PeerView {
     pub authenticated_name: Option<String>,
     pub host: String,
     pub port: u16,
-    #[serde(rename = "pearPublicKey")]
-    pub pear_public_key: Option<String>,
     #[serde(rename = "foregroundOnly")]
     pub foreground_only: bool,
     pub enabled: bool,
@@ -726,14 +669,8 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
     if p.secret.trim().is_empty() {
         return Err("pairing JSON is missing its secret".into());
     }
-    if p.pear_public_key
-        .as_deref()
-        .is_some_and(|key| !valid_public_key(key))
-    {
-        return Err("pairing JSON contains an invalid Pear public key".into());
-    }
-    if p.host.trim().is_empty() && p.pear_public_key.is_none() {
-        return Err("pairing JSON has neither a LAN endpoint nor a Pear public key".into());
+    if p.host.trim().is_empty() || p.port == 0 {
+        return Err("pairing JSON has no LAN endpoint".into());
     }
     let mut guard = state.peers.write().await;
     if guard.peers.iter().any(|e| e.id == p.device_id) {
@@ -750,7 +687,6 @@ pub async fn add_peer(state: State<'_, AppState>, payload_json: String) -> Resul
         authenticated_name: (!p.name.trim().is_empty()).then_some(p.name),
         host: p.host,
         port: p.port,
-        pear_public_key: p.pear_public_key,
         availability: p.availability,
         disabled: false,
         secret_b64: p.secret,
@@ -787,7 +723,6 @@ pub async fn list_peers(state: State<'_, AppState>) -> Result<Vec<PeerView>, Str
             authenticated_name: p.authenticated_name.clone(),
             host: p.host.clone(),
             port: p.port,
-            pear_public_key: p.pear_public_key.clone(),
             foreground_only: p.availability.as_deref() == Some("foreground"),
             enabled: !p.disabled,
             created_at: p.created_at,
@@ -845,10 +780,6 @@ pub async fn update_settings(
     state: State<'_, AppState>,
     settings: AppSettings,
 ) -> Result<AppSettings, String> {
-    // Persist the user's routing policy before starting its runtime. A
-    // transient Pear startup failure must not silently reset the selector to
-    // Local only; retaining the preference also lets the next launch/pairing
-    // attempt retry startup.
     crate::storage::settings::save(&state.paths.settings, &settings).map_err(|e| e.to_string())?;
     *state.settings.write().await = settings.clone();
     state.automatic_file_download_limit_bytes.store(
@@ -861,17 +792,6 @@ pub async fn update_settings(
     );
 
     let sync_running = state.sync_shutdown.lock().unwrap().is_some();
-    if sync_running {
-        crate::apply_pear_mode(&state, settings.sync_transport_mode)
-            .await
-            .map_err(|error| format!("could not enable Pear: {error}"))?;
-    } else {
-        *state.transport_mode.write().await = settings.sync_transport_mode;
-        crate::apply_pear_mode(&state, crate::sync::SyncTransportMode::LocalOnly)
-            .await
-            .map_err(|error| error.to_string())?;
-        *state.transport_mode.write().await = settings.sync_transport_mode;
-    }
 
     // Keep the pair-endpoint gate in lock-step with the discoverable toggle.
     // Turning discoverability OFF should immediately refuse new pair requests,
@@ -2111,7 +2031,7 @@ pub async fn download_blob_anyway(
     media_type: String,
 ) -> Result<(), String> {
     validate_blob_ref(&hash, &media_type)?;
-    // Voice and image blobs can also fail to arrive — a dropped Pear transfer, or
+    // Voice and image blobs can also fail to arrive — a dropped transfer, or
     // an automatic-download limit that skipped them — and the user is then stuck
     // looking at "not on this device" with no recourse. The request path below is
     // media-type agnostic, so there is no reason to restrict this to attachments.

@@ -13,7 +13,7 @@ fn main() {
             Some("server" | "--server")
         ) {
             let server_args = args[1..].to_vec();
-            ncy_server::run(&server_args, bundled_pear_paths())
+            ncy_server::run(&server_args)
         } else {
             ncy_desktop_lib::cli::run(&args)
         };
@@ -40,19 +40,3 @@ fn attach_parent_console() {
 
 #[cfg(not(windows))]
 fn attach_parent_console() {}
-
-fn bundled_pear_paths() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
-    let development =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ncy-core/pear-sidecar");
-    let root = if development.exists() {
-        development
-    } else {
-        std::env::current_exe().ok()?.parent()?.join("pear-sidecar")
-    };
-    let runtime = if cfg!(windows) {
-        root.join("node_modules/bare-runtime-win32-x64/bin/bare.exe")
-    } else {
-        root.join("node_modules/.bin/bare")
-    };
-    Some((runtime, root.join("out/ncy-pear-sidecar.bundle")))
-}

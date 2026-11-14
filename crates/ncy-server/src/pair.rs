@@ -20,7 +20,6 @@ use ncy_core::storage::{
 use crate::config::Config;
 
 pub fn run(config: &Config, name: Option<String>) -> Result<()> {
-    let _ = pairing_pear_public_key(config)?;
     let paths = data_paths(config.data_dir.clone());
     std::fs::create_dir_all(&paths.root)?;
 
@@ -37,7 +36,6 @@ pub fn run(config: &Config, name: Option<String>) -> Result<()> {
 }
 
 pub fn replace_invitation(config: &Config, id: &str) -> Result<()> {
-    let _ = pairing_pear_public_key(config)?;
     let paths = data_paths(config.data_dir.clone());
     let identity = DesktopIdentity::load_or_create(&paths.identity, &config.device_name)?;
     let mut file = load_pairings(&paths.pairings).unwrap_or_default();
@@ -204,8 +202,7 @@ fn print_payload(
     verb: &str,
 ) -> Result<()> {
     let host = best_lan_ip();
-    let pear_public_key = pairing_pear_public_key(config)?;
-    let mut payload = serde_json::json!({
+    let payload = serde_json::json!({
         "v": 1,
         "deviceId": identity.device_id,
         "name": config.device_name,
@@ -213,9 +210,6 @@ fn print_payload(
         "port": config.port,
         "secret": pairing.secret_b64,
     });
-    if let Some(public_key) = pear_public_key {
-        payload["pearPublicKey"] = serde_json::Value::String(public_key);
-    }
 
     let compact = serde_json::to_string(&payload)?;
     // JSON on stdout so it can be piped/copied; guidance + QR on stderr so they
@@ -235,23 +229,6 @@ fn print_payload(
     Ok(())
 }
 
-fn pairing_pear_public_key(config: &Config) -> Result<Option<String>> {
-    if config.sync_transport_mode.uses_pear() {
-        let path = config.data_dir.join("pear-public-key.txt");
-        let key = std::fs::read_to_string(&path).map_err(|_| {
-            anyhow::anyhow!(
-                "Pear public key is not available yet; start ncy-server once with Pear enabled, then run this command again"
-            )
-        })?;
-        let key = key.trim().to_owned();
-        if !ncy_core::sync::pear::valid_public_key(&key) {
-            anyhow::bail!("stored Pear public key is invalid; restart ncy-server to regenerate it");
-        }
-        Ok(Some(key))
-    } else {
-        Ok(None)
-    }
-}
 
 fn warn_restart() {
     eprintln!("A running ncy-server reloads this pairing change automatically.\n");

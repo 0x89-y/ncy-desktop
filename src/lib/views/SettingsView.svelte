@@ -65,7 +65,6 @@
   let accent = $state("purple");
   let discoverable = $state(false);
   let transcriptionEnabled = $state(false);
-  let syncTransportMode = $state<AppSettings["syncTransportMode"]>("localOnly");
   let automaticFileDownloadLimitBytes = $state(100 * 1024 * 1024);
   let automaticFileDownloadMode = $state("104857600");
   let desktopPrefs = $state<DesktopPrefs>({
@@ -136,7 +135,6 @@
       accent = $settings.accent ?? "purple";
       discoverable = $settings.discoverable;
       transcriptionEnabled = $settings.transcriptionEnabled ?? false;
-      syncTransportMode = $settings.syncTransportMode ?? "localOnly";
       automaticFileDownloadLimitBytes =
         $settings.automaticFileDownloadLimitBytes ?? 100 * 1024 * 1024;
       cutoffMs = $settings.mediaBackfillCutoffMs ?? 0;
@@ -177,36 +175,9 @@
       discoverable,
       accent,
       transcriptionEnabled,
-      syncTransportMode,
       automaticFileDownloadLimitBytes,
       mediaBackfillCutoffMs: cutoffMs,
     };
-  }
-
-  async function applyTransportMode(next: AppSettings["syncTransportMode"]) {
-    if (next === syncTransportMode) return;
-    if (next !== "localOnly" && syncTransportMode === "localOnly") {
-      const accepted = await requestConfirmation(
-        "Enable Pear networking? Ncy will start a bundled peer-to-peer networking process and contact the Pear/Holepunch discovery infrastructure so your paired devices can connect over the internet. Chat contents remain end-to-end protected by Ncy's existing pairing credentials.",
-      );
-      if (!accepted) return;
-    }
-    syncTransportMode = next;
-    markDirty();
-    try {
-      await persistSettings({ syncTransportMode: next });
-    } catch (error) {
-      await refreshSettings();
-      const message = typeof error === "string"
-        ? error
-        : error instanceof Error
-          ? error.message
-          : "unknown error";
-      await showNotice(`The connection method was saved, but Pear could not start: ${message}`, {
-        title: "Pear could not start",
-        dangerous: true,
-      });
-    }
   }
 
   async function persistSettings(changes: Partial<AppSettings>) {
@@ -697,22 +668,12 @@
           <span class="opt-label">Sync between devices</span>
           <span class="row status-control"><span class="status-badge" class:success={$serverStatus === "running"} class:error={$serverStatus === "error"}>{serverStatusLabel}</span><span class="switch"><input type="checkbox" checked={desktopPrefs.syncServerEnabled} onchange={(e) => updateDesktopPref("syncServerEnabled", e.currentTarget.checked)} /><span class="slider"></span></span></span>
         </label>
-        <div class="field">
-          <span class="field-label">Connection mode</span>
-          <div class="mode-tabs" aria-label="Connection mode">
-            <button class:on={syncTransportMode === "localOnly"} onclick={() => applyTransportMode("localOnly")}>Local only</button>
-            <button class:on={syncTransportMode === "pearOnly"} onclick={() => applyTransportMode("pearOnly")}>Pear only</button>
-            <button class:on={syncTransportMode === "localPreferred"} onclick={() => applyTransportMode("localPreferred")}>Local preferred</button>
-            <button class:on={syncTransportMode === "pearPreferred"} onclick={() => applyTransportMode("pearPreferred")}>Pear preferred</button>
-          </div>
-          <span class="tiny muted">{syncTransportMode === "localOnly" ? "Uses your current network only." : syncTransportMode === "pearOnly" ? "Pairs and syncs across networks using Pear." : syncTransportMode === "localPreferred" ? "Uses your current network when available, with Pear across networks." : "Uses Pear when available, with local-network fallback."}</span>
-        </div>
       </div>
     </div>
   </section>
 
   <div class:sync-disabled={!desktopPrefs.syncServerEnabled}>
-    <DevicesPane connectionMode={syncTransportMode} />
+    <DevicesPane />
   </div>
 
   <section class="group">
@@ -1125,23 +1086,6 @@
       </div>
       </div>
     </div>
-    <div class="settings-subsection">
-      <div class="subsection-title">Legal information</div>
-      <div class="opt-list">
-      <div class="opt-row">
-        <span class="opt-label">
-          Pear open-source components
-          <span class="inline-hint">Bare/Bare Kit and UDX · Apache-2.0; Hyperswarm, HyperDHT, and sodium-native · MIT.</span>
-        </span>
-      </div>
-      <div class="opt-row">
-        <span class="opt-label">
-          Third-party notices
-          <span class="inline-hint">A detailed Apache-2.0, MIT, and ISC dependency inventory and the supplied license and notice texts are installed with the Pear runtime.</span>
-        </span>
-      </div>
-      </div>
-    </div>
   </section>
 
   <section class="group">
@@ -1388,18 +1332,6 @@
   .status-badge { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: .75rem; }
   .status-badge.success { color: var(--success); }
   .status-badge.error { color: var(--danger); }
-  .mode-tabs {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 2px;
-    padding: 2px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface-2);
-  }
-  .mode-tabs button { border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); padding: .48rem .5rem; }
-  .mode-tabs button:hover { background: var(--surface-hover); color: var(--text); filter: none; }
-  .mode-tabs button.on { background: var(--accent); color: var(--accent-contrast); }
   .sync-disabled { opacity: .55; }
   .sync-disabled :global(button), .sync-disabled :global(input), .sync-disabled :global(textarea) { pointer-events: none; }
   .technical-disclosure { padding: .75rem var(--settings-pad); border-top: 1px solid var(--border); }

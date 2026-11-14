@@ -7,16 +7,17 @@ echo ===========================================
 echo   Stage Ncy release  (installer + latest.json)
 echo ===========================================
 echo.
+echo Manual fallback for the GitHub "Release" workflow, which normally does this.
 echo Takes the NSIS installer that build.bat just produced, renames it to the
-echo stable URL the updater points at, and writes latest.json with the matching
-echo signature already pasted in. Run build.bat first.
+echo stable asset name, and writes latest.json with the matching signature
+echo already pasted in. Run build.bat first.
 echo.
 
-rem ---- Version comes from tauri.conf.json, the single source of truth --------
+rem ---- Version: package.json, Cargo.toml and tauri.conf.json must agree ------
 set "VER="
-for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content -Raw 'src-tauri\tauri.conf.json' | ConvertFrom-Json).version"`) do set "VER=%%v"
+for /f "usebackq delims=" %%v in (`node scripts\release.mjs version`) do set "VER=%%v"
 if not defined VER (
-    echo ERROR: could not read "version" from src-tauri\tauri.conf.json.
+    echo ERROR: could not read a consistent version, see the message above.
     echo.
     pause
     exit /b 1
@@ -46,29 +47,11 @@ if not exist "%SIG%" (
 rem ---- Release notes: one line, shown in the updater's latest.json -----------
 set "NOTES="
 set /p "NOTES=Release notes (one line, blank for a default): "
-if not defined NOTES set "NOTES=Ncy %VER%. See Settings > About for the full changelog."
 
 if not exist "release" mkdir "release"
 copy /y "%SETUP%" "release\Ncy-windows-x64-setup.exe" >nul
 
-rem ---- Write latest.json with the signature inlined --------------------------
-rem The signature file is a base64 blob; read it raw so no newline sneaks in.
-rem Write with WriteAllText + UTF8Encoding($false), NOT `Set-Content -Encoding utf8`:
-rem Windows PowerShell 5.1 emits a UTF-8 BOM, and the Tauri updater parses the
-rem manifest with serde_json, which rejects a leading BOM. The client surfaces
-rem that as the useless "error decoding response body".
-powershell -NoProfile -Command ^
-  "$sig = (Get-Content -Raw '%SIG%').Trim();" ^
-  "$manifest = [ordered]@{" ^
-  "  version   = '%VER%';" ^
-  "  notes     = '%NOTES%';" ^
-  "  pub_date  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ');" ^
-  "  platforms = [ordered]@{ 'windows-x86_64' = [ordered]@{ signature = $sig; url = 'https://0x89-y.xyz/ncy/Ncy-windows-x64-setup.exe' } }" ^
-  "};" ^
-  "$json = $manifest | ConvertTo-Json -Depth 5;" ^
-  "$out = Join-Path (Get-Location).Path 'release\latest.json';" ^
-  "[System.IO.File]::WriteAllText($out, $json, (New-Object System.Text.UTF8Encoding $false))"
-
+node scripts\release.mjs manifest "%SIG%" "release\latest.json" "%NOTES%"
 if not "%ERRORLEVEL%"=="0" (
     echo.
     echo FAILED to write release\latest.json
@@ -76,14 +59,18 @@ if not "%ERRORLEVEL%"=="0" (
     pause
     exit /b 1
 )
+node scripts\release.mjs notes "release\notes.md" >nul
 
 echo.
 echo STAGED OK  (v%VER%).
 echo.
 echo   release\Ncy-windows-x64-setup.exe
 echo   release\latest.json
+echo   release\notes.md   (release body, from CHANGELOG.md)
 echo.
-echo   Next: upload BOTH files to https://0x89-y.xyz/ncy/ .
+echo   Next: create the GitHub release v%VER% on 0x89-y/ncy-desktop and attach
+echo   BOTH files under exactly these names. latest.json points at
+echo   releases/download/v%VER%/Ncy-windows-x64-setup.exe, so the tag must match.
 echo   Existing installs pick up the update on their next check (startup, then
 echo   every 3 hours), or immediately via Settings ^> About ^> Check now.
 echo.
