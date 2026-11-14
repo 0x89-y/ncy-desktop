@@ -1,10 +1,9 @@
 # Ncy Desktop
 
-Desktop client for [Ncy](https://github.com/0x89-y/ncy-android), the Android "note-to-self"
-chat app. It implements the full Ncy sync protocol: bidirectional, near-real-time and
-peer-to-peer over authenticated, encrypted WebSockets on your local network.
+A note-to-self chat app for Windows. Notes are stored locally and can optionally sync
+with other Ncy devices on the same network over encrypted WebSockets.
 
-Built with **Tauri 2** (Rust) and **Svelte 5** + **TypeScript**.
+Built with Tauri 2 (Rust) and Svelte 5 + TypeScript.
 
 ## Download
 
@@ -84,16 +83,14 @@ Everything lives in the app-data directory, `%APPDATA%\com.ncy.desktop\ncy\` on 
 - `pairings.json`: pairings, their secrets and per-pairing sync positions
 - `peers.json`: other desktops this one connects to
 - `settings.json`: port, device name, appearance and sync preferences
-- `events/<chatId>.ndjson`: one append-only event log per chat, line-for-line identical
-  to the phone's
+- `events/<chatId>.ndjson`: one append-only event log per chat
 - `blobs/`: content-addressed media, shared across chats by hash
 
 ## Protocol
 
-The wire protocol is documented in the Ncy repository at
-[`docs/sync-protocol.md`](https://github.com/0x89-y/ncy-android/blob/main/docs/sync-protocol.md):
-handshake, hybrid logical clocks, event, blob and ack frames, sync positions and the
-encryption envelope. The Rust implementation lives in `ncy-core`.
+The sync protocol is documented in
+[`ncy-android/docs/sync-protocol.md`](https://github.com/0x89-y/ncy-android/blob/main/docs/sync-protocol.md).
+The Rust implementation is in `ncy-core`.
 
 ## Layout
 
