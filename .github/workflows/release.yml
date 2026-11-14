@@ -41,19 +41,19 @@ jobs:
     steps:
       # Same sibling layout as local dev: ncy-desktop/ next to ncy-core/, so the
       # ../../ncy-core path dependency and bundle resources resolve unchanged.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: ncy-desktop
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           repository: 0x89-y/ncy-core
           ref: ${{ inputs.core_ref }}
           path: ncy-core
           token: ${{ secrets.NCY_CORE_TOKEN || github.token }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 26
           cache: npm
           cache-dependency-path: ncy-desktop/package-lock.json
 
@@ -72,8 +72,20 @@ jobs:
         with:
           workspaces: ncy-desktop -> target
 
+      # Job logs need a GitHub login to read; annotations are public. On failure,
+      # repeat the error lines as an annotation so they show on the run page and
+      # through the API.
       - name: Install dependencies
-        run: npm ci
+        run: |
+          echo "node $(node -v), npm $(npm -v)"
+          set +e
+          npm ci 2>&1 | tee ../step.log; status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -iE "npm (error|err!)" ../step.log | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=npm ci failed::${msg:-see log}"
+            exit "$status"
+          fi
 
       # Fast gate: type check plus unit tests, which include the in-app
       # changelog drift check.
@@ -91,7 +103,14 @@ jobs:
             echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set"
             exit 1
           fi
-          npm run tauri build -- --bundles nsis
+          set +e
+          npm run tauri build -- --bundles nsis 2>&1 | tee ../step.log; status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            msg=$(grep -E "^(error|Error|failed)|error(\[E[0-9]+\])?:" ../step.log | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=tauri build failed::${msg:-see log}"
+            exit "$status"
+          fi
 
       - name: Stage release files
         env:
