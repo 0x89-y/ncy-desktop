@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from "../ipc";
-  import { activeTag, allTags, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, showArchived, type ChatPane } from "../stores/app";
+  import { activeTag, activeView, allTags, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, settingsTab, showArchived, type ChatPane } from "../stores/app";
   import { Bell, Check, Filter, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
   import type { Message } from "../ipc";
   import ChatList from "./ChatList.svelte";
@@ -47,11 +47,14 @@
     if (!paired.length) return null;
     const latest = [...paired].sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))[0];
     const name = latest.phoneName || latest.label;
+    const when = latest.lastSeenAt ? ` · ${ago(latest.lastSeenAt)}` : "";
     if ($connectedPeers.size > 0) {
-      const who = $connectedPeers.size > 1 ? `${$connectedPeers.size} devices` : name;
-      return { online: true, text: `Synced with ${who}${latest.lastSeenAt ? ` · ${ago(latest.lastSeenAt)}` : ""}` };
+      const more = $connectedPeers.size - 1;
+      return { online: true, text: `Synced with ${name}${more > 0 ? ` and ${more} more` : ""}${when}` };
     }
-    return { online: false, text: latest.lastSeenAt ? `${name} is away · seen ${ago(latest.lastSeenAt)}` : `Paired with ${name}` };
+    // Offline, no one device is named: with several paired, naming the most recent
+    // one suggested it was the one that mattered. Devices & sync lists them all.
+    return { online: false, text: latest.lastSeenAt ? `Not connected · last synced ${ago(latest.lastSeenAt)}` : "Paired · not synced yet" };
   });
   let searchOpen = $state(false);
   let filtersOpen = $state(false);
@@ -192,7 +195,9 @@
 
   <h1 class="pane-title">{paneTitle}</h1>
   {#if syncLine}
-    <div class="sync-line"><span class="dot" class:online={syncLine.online}></span>{syncLine.text}</div>
+    <button type="button" class="sync-line" title="Devices & sync" onclick={() => { settingsTab.set("sync"); activeView.set("settings"); }}>
+      <span class="dot" class:online={syncLine.online}></span>{syncLine.text}
+    </button>
   {/if}
   <div class="chips" role="tablist" aria-label="Chat views">
     {#each tabs as t (t.key)}
@@ -266,10 +271,16 @@
     display: flex;
     align-items: center;
     gap: .45rem;
-    padding: .15rem 1.1rem 0;
+    margin: .1rem .6rem 0;
+    padding: .2rem .5rem;
     font-size: .8rem;
     color: var(--text-muted);
+    background: transparent;
+    border-radius: var(--radius-sm);
+    text-align: left;
+    align-self: flex-start;
   }
+  .sync-line:hover { background: var(--surface-hover); color: var(--text); }
   .sync-line .dot {
     width: 7px;
     height: 7px;
