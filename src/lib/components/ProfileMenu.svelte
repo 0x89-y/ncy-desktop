@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, Users, X } from "@lucide/svelte";
+  import { Users, X } from "@lucide/svelte";
   import { api } from "../ipc";
   import { activeProfileId, profileBuckets, refreshChats, selectChat } from "../stores/app";
 
@@ -88,9 +88,9 @@
   {#if menuOpen}
     <button class="menu-backdrop" aria-label="Close profile menu" onclick={() => menuOpen = false}></button>
     <div class="profile-menu">
-      <button onclick={() => selectProfile(null)}><span>All chats</span>{#if $activeProfileId === null}<Check size={14} />{/if}</button>
+      <button class:current={$activeProfileId === null} aria-current={$activeProfileId === null ? "true" : undefined} onclick={() => selectProfile(null)}><span>All chats</span></button>
       {#each $profileBuckets as profile (profile.id)}
-        <button onclick={() => selectProfile(profile.id)}><span>{profile.name}</span>{#if $activeProfileId === profile.id}<Check size={14} />{/if}</button>
+        <button class:current={$activeProfileId === profile.id} aria-current={$activeProfileId === profile.id ? "true" : undefined} onclick={() => selectProfile(profile.id)}><span>{profile.name}</span></button>
       {/each}
       <div class="separator"></div>
       <button onclick={openManager}><span>Manage profiles…</span><Users size={14} /></button>
@@ -112,14 +112,12 @@
     </header>
 
     <div class="profile-list">
-      <button class:active={$activeProfileId === null} onclick={() => { selectProfile(null); closeManager(); }}>
+      <button class:current={$activeProfileId === null} aria-current={$activeProfileId === null ? "true" : undefined} onclick={() => { selectProfile(null); closeManager(); }}>
         <span><strong>All chats</strong><small class="muted">Show every profile</small></span>
-        {#if $activeProfileId === null}<Check size={16} />{/if}
       </button>
       {#each $profileBuckets as profile (profile.id)}
-        <button class:active={$activeProfileId === profile.id} onclick={() => { selectProfile(profile.id); closeManager(); }}>
+        <button class:current={$activeProfileId === profile.id} aria-current={$activeProfileId === profile.id ? "true" : undefined} onclick={() => { selectProfile(profile.id); closeManager(); }}>
           <span><strong>{profile.name}</strong><small class="muted">{profile.profileId ? "Synchronized profile" : "Chats without a profile"}</small></span>
-          {#if $activeProfileId === profile.id}<Check size={16} />{/if}
         </button>
       {/each}
     </div>
@@ -274,7 +272,27 @@
     text-align: left;
   }
   .profile-list button:hover,
-  .profile-list button.active { background: var(--surface-hover); filter: none; }
+  /* The current profile: a stronger accent tint, an accent bar and a bolder name,
+     like the open chat and the active settings section. No check mark. */
+  .profile-menu button.current,
+  .profile-list button.current {
+    position: relative;
+    background: var(--accent-selected);
+    color: var(--on-accent-soft);
+    font-weight: 600;
+  }
+  .profile-menu button.current::before,
+  .profile-list button.current::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: .35rem;
+    bottom: .35rem;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  .profile-list button.current .muted { color: var(--on-accent-soft); }
   .profile-list span {
     display: flex;
     min-width: 0;
