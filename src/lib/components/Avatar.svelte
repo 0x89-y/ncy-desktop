@@ -1,6 +1,7 @@
 <script lang="ts">
   import { avatarColor } from "../format";
   import { api, extractMediaHash } from "../ipc";
+  import { arrivedBlobs } from "../stores/app";
 
   let {
     name,
@@ -17,12 +18,16 @@
   // Pre-phase-2b avatars have legacy random/fixed names (e.g. "avatar.jpg"); those
   // never sync to the desktop. Only content-addressed refs are fetchable.
   const hash = $derived(extractMediaHash(avatarFile));
+  // A picture set on another device can arrive after its chat does. Asking again
+  // when it lands shows it at once; before, it waited for a restart.
+  const arrived = $derived(hash ? $arrivedBlobs.has(hash) : false);
 
   let dataUrl = $state<string | null>(null);
   let failed = $state(false);
 
   $effect(() => {
     const h = hash;
+    void arrived;
     dataUrl = null;
     failed = false;
     if (!h) return;

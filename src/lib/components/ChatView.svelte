@@ -2,6 +2,7 @@
   import { requestConfirmation } from "../stores/confirm";
   import {
     activeChat,
+    arrivedBlobs,
     chats,
     upcomingReminders,
     refreshActiveChat,
@@ -62,9 +63,12 @@
   // Legacy `background.jpg` references (pre-content-addressing) extract to null and are
   // silently skipped — older builds rendered them locally; they can't sync.
   let backgroundDataUrl = $state<string | null>(null);
+  const backgroundHash = $derived($activeChat ? extractMediaHash($activeChat.metadata.backgroundFile) : null);
+  // Load again when a background set on another device lands after its chat.
+  const backgroundArrived = $derived(backgroundHash ? $arrivedBlobs.has(backgroundHash) : false);
   $effect(() => {
-    const c = $activeChat;
-    const hash = c ? extractMediaHash(c.metadata.backgroundFile) : null;
+    const hash = backgroundHash;
+    void backgroundArrived;
     backgroundDataUrl = null;
     if (!hash) return;
     api
