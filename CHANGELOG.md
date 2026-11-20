@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.8.0 - 2026-11-20
+
+### Changed
+
+- A new look, shared with the Android app: the whole window follows your accent colour,
+  with neutral greys tinted toward it, in light and dark.
+- Seven accents: ink blue (the new default), teal, moss, violet, plum, graphite and
+  terracotta. An accent picked before maps to the nearest one: purple to violet, blue to
+  ink blue, green to moss, pink to plum, orange to terracotta.
+- Ncy now uses the Geist typeface, with Geist Mono for times and labels.
+- Your notes sit on a soft tint of the accent, and notes from other devices on plain
+  paper. Bubbles no longer take a chat's own colour; that colour tints the chat's tile.
+- The chat list shows a sync line, filter chips for All, Starred and Reminders, the next
+  reminder at the top, and pinned chats in their own section.
+- Chats are set in a centred column on wide windows, and show how many notes they hold.
+- The pairing dialog shows the safety code larger, to compare at a glance.
+
 ## 0.7.6 - 2026-11-14
 
 ### Added

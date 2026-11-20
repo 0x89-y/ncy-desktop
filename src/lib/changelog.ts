@@ -15,6 +15,19 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.8.0",
+    date: "2026-11-20",
+    changes: [
+      "A new look, shared with the Android app, that follows your accent colour.",
+      "Seven accents, with ink blue as the new default.",
+      "Ncy now uses the Geist typeface.",
+      "Your notes sit on the accent tint and notes from other devices on plain paper.",
+      "The chat list shows a sync line, filter chips, the next reminder and a pinned section.",
+      "Chats sit in a centred column on wide windows.",
+      "The pairing safety code is larger.",
+    ],
+  },
+  {
     version: "0.7.6",
     date: "2026-11-14",
     changes: [
