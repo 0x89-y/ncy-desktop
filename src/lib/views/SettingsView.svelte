@@ -1312,6 +1312,7 @@
   .changelog-series { margin:0 var(--settings-pad) 1rem; max-width:calc(100% - 2 * var(--settings-pad)); overflow-x:auto; }
   .panes:has(.changelog-view) { padding-top:0; }
   .side-link {
+    position: relative;
     text-align: left;
     padding: .5rem .7rem;
     border: none;
@@ -1323,11 +1324,22 @@
     cursor: pointer;
   }
   .side-link:hover { background: var(--surface-hover); color: var(--text); filter: none; }
-  /* The active section takes the accent tint, like the selected filter chip. */
+  /* The active section: a stronger accent tint and an accent bar, like the open
+     chat in the list, so it reads at a glance. */
   .side-link.active {
-    background: var(--accent-soft);
+    background: var(--accent-selected);
     color: var(--on-accent-soft);
     font-weight: 600;
+  }
+  .side-link.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: .4rem;
+    bottom: .4rem;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
   }
   .panes {
     flex: 1;
@@ -1425,9 +1437,10 @@
     line-height: 1;
   }
   .seg-btn:hover { background: var(--surface-hover); color: var(--text); }
+  /* Solid accent: in a row of equal options, the chosen one has to be unmistakable. */
   .seg-btn.on {
-    background: var(--accent-soft);
-    color: var(--on-accent-soft);
+    background: var(--accent);
+    color: var(--accent-contrast);
     font-weight: 600;
   }
   /* Matches the Chat / Starred / Reminders selector in the main sidebar. */
@@ -1457,7 +1470,7 @@
     transition: background-color .15s ease, color .15s ease;
   }
   .model-tab:hover:not(.on) { background: var(--surface-hover); color: var(--text); filter: none; }
-  .model-tab.on { background: var(--accent-soft); color: var(--on-accent-soft); font-weight: 600; }
+  .model-tab.on { background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
   .model-apply-row { margin-top: .15rem; }
   /* Accent swatch row */
   .accents {

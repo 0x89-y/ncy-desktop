@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api } from "../ipc";
-  import { activeTag, activeView, allTags, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, settingsTab, showArchived, type ChatPane } from "../stores/app";
+  import { activeTag, activeView, allTags, upcomingReminders, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, settingsTab, showArchived, type ChatPane } from "../stores/app";
   import { Bell, Check, Filter, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
   import type { Message } from "../ipc";
   import ChatList from "./ChatList.svelte";
@@ -114,20 +114,20 @@
 
   async function refreshReminderCount(run: number) {
     const now = Date.now();
-    let count = 0;
-    let next: { chatId: string; chatName: string; text: string; at: number } | null = null;
+    const upcoming: { chatId: string; chatName: string; text: string; at: number }[] = [];
     for (const c of $chats) {
       const data = await api.getChat(c.id);
       if (!data) continue;
       for (const m of data.messages) {
         if (!m.reminderAt || m.reminderAt < now) continue;
-        count += 1;
-        if (!next || m.reminderAt < next.at) next = { chatId: c.id, chatName: c.name, text: noteText(m), at: m.reminderAt };
+        upcoming.push({ chatId: c.id, chatName: c.name, text: noteText(m), at: m.reminderAt });
       }
     }
     if (run !== reminderCountRun) return;
-    reminderCount = count;
-    upNext = next ? { ...next, more: count - 1 } : null;
+    upcoming.sort((a, b) => a.at - b.at);
+    reminderCount = upcoming.length;
+    upNext = upcoming.length ? { ...upcoming[0], more: upcoming.length - 1 } : null;
+    upcomingReminders.set(upcoming);
   }
 
   $effect(() => {
@@ -313,8 +313,8 @@
   .chip-tab:hover:not(.on) { background: var(--surface-hover); }
   /* Selected: the accent tint and bolder text, so it reads without colour alone. */
   .chip-tab.on {
-    background: var(--accent-soft);
-    border-color: var(--accent-edge);
+    background: var(--accent-selected);
+    border-color: var(--accent);
     color: var(--on-accent-soft);
     font-weight: 600;
   }

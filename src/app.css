@@ -33,6 +33,8 @@
   --accent-soft: color-mix(in srgb, var(--accent) 11%, #ffffff);
   --accent-edge: color-mix(in srgb, var(--accent) 26%, #ffffff);
   --on-accent-soft: color-mix(in srgb, var(--accent) 38%, #000000);
+  /* Stronger tint for "this one is selected": the soft tint sat too close to --bg. */
+  --accent-selected: color-mix(in srgb, var(--accent) 18%, #ffffff);
   --danger: #b42318;
   --success: #2f7d48;
   --online: #2f7d48;
@@ -78,6 +80,7 @@
   --accent-soft: color-mix(in srgb, var(--accent) 20%, #28282c);
   --accent-edge: color-mix(in srgb, var(--accent) 34%, #28282c);
   --on-accent-soft: color-mix(in srgb, var(--accent) 55%, #ffffff);
+  --accent-selected: color-mix(in srgb, var(--accent) 32%, #28282c);
   --danger: #f07a6a;
   --success: #7ccb94;
   --online: #7ccb94;

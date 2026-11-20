@@ -2,6 +2,8 @@
   import { requestConfirmation } from "../stores/confirm";
   import {
     activeChat,
+    chats,
+    upcomingReminders,
     refreshActiveChat,
     refreshChats,
     selectChat,
@@ -12,14 +14,14 @@
     setTranscriptionError,
   } from "../stores/app";
   import { api, extractMediaHash, type Message } from "../ipc";
-  import { messagePreview, replyPreviewText } from "../format";
+  import { formatTime, messagePreview, replyPreviewText } from "../format";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { writeText, readText } from "@tauri-apps/plugin-clipboard-manager";
   import { parseMarkdown, prefixSelectedLines, wrapSelection } from "../markdown";
   import {
     Bold, Code2, Heading1, Heading2, Heading3, Italic, List, ListChecks,
     Plus, Pin, Lock, Strikethrough, Unlock, X,
-    ArrowDown, Check, MessageSquare, Mic, Settings, Square,
+    ArrowDown, ArrowUp, Bell, Check, MessageSquare, Mic, Settings,
   } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
   import MessageBubble from "./MessageBubble.svelte";
@@ -87,6 +89,17 @@
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
   const messageIds = $derived(new Set(($activeChat?.messages ?? []).map((m) => m.id)));
+  const recentChats = $derived(
+    [...$chats].filter((c) => !c.isArchived && c.lastMessageAt).sort((a, b) => (b.lastMessageAt ?? 0) - (a.lastMessageAt ?? 0)).slice(0, 4),
+  );
+  function reminderWhen(ms: number): string {
+    const d = new Date(ms), now = new Date();
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (d.toDateString() === now.toDateString()) return time;
+    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
+    if (d.toDateString() === tomorrow.toDateString()) return `Tomorrow ${time}`;
+    return d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  }
   const starredCount = $derived(($activeChat?.messages ?? []).filter((m) => m.isStarred).length);
 
   function startReply(m: Message) {
@@ -680,6 +693,24 @@
   let recordedChunks: Blob[] = [];
   let recordStream: MediaStream | null = null;
   let recordTimer: ReturnType<typeof setInterval> | null = null;
+  /** Live input level while recording: one bar per tick, newest on the right. */
+  const REC_BARS = 32;
+  let recordLevels = $state<number[]>([]);
+  let levelContext: AudioContext | null = null;
+  let levelAnalyser: AnalyserNode | null = null;
+  function sampleLevel() {
+    if (!levelAnalyser) return;
+    const data = new Uint8Array(levelAnalyser.fftSize);
+    levelAnalyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (const v of data) peak = Math.max(peak, Math.abs(v - 128) / 128);
+    recordLevels = [...recordLevels, Math.min(1, peak * 1.6)].slice(-REC_BARS);
+  }
+  function stopLevelMeter() {
+    levelAnalyser = null;
+    void levelContext?.close();
+    levelContext = null;
+  }
 
   async function startRecording() {
     const c = $activeChat;
@@ -692,6 +723,15 @@
       return;
     }
     recordedChunks = [];
+    recordLevels = [];
+    try {
+      levelContext = new AudioContext();
+      levelAnalyser = levelContext.createAnalyser();
+      levelAnalyser.fftSize = 256;
+      levelContext.createMediaStreamSource(recordStream).connect(levelAnalyser);
+    } catch {
+      stopLevelMeter(); // the meter is decoration; recording works without it
+    }
     // Prefer AAC-in-MP4 so the blob is a real .m4a that any phone (and
     // symphonia, in the transcription pipeline) can decode without ffmpeg.
     // Recent Edge / WebView2 on Windows supports this via Media Foundation.
@@ -714,6 +754,7 @@
       // Tear down the mic stream regardless of what happens next.
       recordStream?.getTracks().forEach((t) => t.stop());
       recordStream = null;
+      stopLevelMeter();
       const duration = Date.now() - recordStart;
       const blob = new Blob(recordedChunks, {
         type: mediaRecorder?.mimeType ?? mimeType ?? "audio/mp4",
@@ -759,7 +800,8 @@
     recordElapsed = 0;
     recordTimer = setInterval(() => {
       recordElapsed = Date.now() - recordStart;
-    }, 250);
+      sampleLevel();
+    }, 120);
     mediaRecorder.start();
     recording = true;
   }
@@ -1073,86 +1115,117 @@
         </div>
       {/if}
       <div class="compose-row">
-        <div class="attach-group">
-          <button
-            type="button"
-            class="attach"
-            title="Add attachment or checklist"
-            aria-label="Add attachment or checklist"
-            aria-expanded={composeActionsOpen}
-            onclick={() => { composeActionsOpen = !composeActionsOpen; }}
-            disabled={sending}
-          >
-            <Plus size={18} strokeWidth={2.25} />
+        {#if recording}
+          <!-- Recording takes over the row: Discard, the time and level, then Save. -->
+          <button type="button" class="attach-solo" title="Discard recording" aria-label="Discard recording" onclick={cancelRecording} disabled={sending}>
+            <X size={18} strokeWidth={2.25} />
           </button>
-          {#if composeActionsOpen}
+          <div class="rec-bar" role="status" aria-label={`Recording, ${fmtElapsed(recordElapsed)}`}>
+            <span class="rec-dot"></span>
+            <span class="mono tiny">{fmtElapsed(recordElapsed)}</span>
+            <span class="rec-level" aria-hidden="true">
+              {#each Array(REC_BARS) as _, i}
+                {@const level = recordLevels[i - (REC_BARS - recordLevels.length)]}
+                <i class:off={level === undefined} style={`height:${Math.max(3, Math.round((level ?? 0) * 22))}px`}></i>
+              {/each}
+            </span>
+          </div>
+          <button type="button" class="send save" title="Save voice note" aria-label="Save voice note" onclick={stopRecording} disabled={sending}>
+            <Check size={18} strokeWidth={2.5} />
+          </button>
+        {:else}
+          <div class="attach-wrap">
             <button
               type="button"
-              class="actions-backdrop"
-              aria-label="Close add menu"
-              onclick={() => { composeActionsOpen = false; }}
-            ></button>
-            <div class="actions-menu" role="menu">
-              <button type="button" role="menuitem" onclick={attach}>Attach file or image…</button>
-              <button type="button" role="menuitem" onclick={() => {
-                composeActionsOpen = false;
-                formattingOpen = !formattingOpen;
-              }}>{formattingOpen ? "Hide formatting" : "Formatting"}</button>
-              <button type="button" role="menuitem" onclick={() => {
-                composeActionsOpen = false;
-                void startRecording();
-              }}><Mic size={15} strokeWidth={2.25} /> Record voice message</button>
-            </div>
+              class="attach-solo"
+              title="Attach a file, image or checklist"
+              aria-label="Attach a file, image or checklist"
+              aria-expanded={composeActionsOpen}
+              onclick={() => { composeActionsOpen = !composeActionsOpen; }}
+              disabled={sending}
+            >
+              <Plus size={18} strokeWidth={2.25} />
+            </button>
+            {#if composeActionsOpen}
+              <button
+                type="button"
+                class="actions-backdrop"
+                aria-label="Close add menu"
+                onclick={() => { composeActionsOpen = false; }}
+              ></button>
+              <div class="actions-menu" role="menu">
+                <button type="button" role="menuitem" onclick={attach}>Attach file or image…</button>
+                <button type="button" role="menuitem" onclick={() => {
+                  composeActionsOpen = false;
+                  applyLinePrefix("- [ ] ");
+                }}>Checklist</button>
+              </div>
+            {/if}
+          </div>
+          <div class="compose-field">
+            <textarea
+              class="compose-input"
+              placeholder="Write a note…"
+              bind:this={composeTextarea}
+              bind:value={composeText}
+              oninput={resizeComposer}
+              onkeydown={onKeyDown}
+              oncontextmenu={openComposeMenu}
+              disabled={sending}
+              rows="1"
+            ></textarea>
+            <button
+              type="button"
+              class="aa-toggle"
+              class:on={formattingOpen}
+              title={formattingOpen ? "Hide formatting" : "Formatting"}
+              aria-label="Formatting"
+              aria-pressed={formattingOpen}
+              onclick={() => { formattingOpen = !formattingOpen; }}
+            >Aa</button>
+          </div>
+          {#if composeText.trim()}
+            <button type="button" class="send" title="Send (Enter)" aria-label="Send" onclick={send} disabled={sending}>
+              {#if sending}…{:else}<ArrowUp size={18} strokeWidth={2.5} />{/if}
+            </button>
+          {:else}
+            <!-- An empty composer offers a voice note where Send will be, as on the phone. -->
+            <button type="button" class="send" title="Record a voice note" aria-label="Record a voice note" onclick={() => void startRecording()} disabled={sending}>
+              <Mic size={18} strokeWidth={2.25} />
+            </button>
           {/if}
-          {#if recording}
-          <button
-            type="button"
-            class="attach"
-            class:recording
-            title="Stop recording"
-            aria-label="Stop recording"
-            onclick={stopRecording}
-            disabled={sending}
-          >
-            <Square size={16} strokeWidth={2.25} />
-          </button>
-          {/if}
-        </div>
-        {#if recording}
-          <span class="rec-indicator" title="Recording…">
-            <span class="rec-dot"></span>
-            <span class="tiny mono">{fmtElapsed(recordElapsed)}</span>
-            <button type="button" class="text-btn tiny" onclick={cancelRecording}>Cancel</button>
-          </span>
         {/if}
-        <textarea
-          class="compose-input"
-          placeholder="Write a note…"
-          bind:this={composeTextarea}
-          bind:value={composeText}
-          oninput={resizeComposer}
-          onkeydown={onKeyDown}
-          oncontextmenu={openComposeMenu}
-          disabled={sending}
-          rows="1"
-        ></textarea>
-        <button
-          type="button"
-          class="send"
-          onclick={send}
-          disabled={sending || !composeText.trim()}
-        >
-          {sending ? "…" : "Send"}
-        </button>
       </div>
     </footer>
     {/if}
   </div>
 {:else}
-  <div class="placeholder muted">
-    <div>
-      <div style="line-height:0;color:var(--text-muted);opacity:.5"><MessageSquare size={56} strokeWidth={1.5} /></div>
-      <p>Select a chat to view its messages.</p>
+  <!-- No chat open: the next reminders and recent chats, one click away. -->
+  <div class="placeholder">
+    <div class="home-card">
+      {#if $upcomingReminders.length}
+        <div class="home-label">Up next</div>
+        {#each $upcomingReminders.slice(0, 3) as r (r.chatId + r.at)}
+          <button type="button" class="home-row" onclick={() => selectChat(r.chatId)}>
+            <Bell size={16} strokeWidth={2.25} />
+            <span class="home-main"><span class="home-text">{r.text}</span><span class="home-sub">{r.chatName}</span></span>
+            <span class="home-time">{reminderWhen(r.at)}</span>
+          </button>
+        {/each}
+      {/if}
+      {#if recentChats.length}
+        <div class="home-label">Recent</div>
+        {#each recentChats as c (c.id)}
+          <button type="button" class="home-row" onclick={() => selectChat(c.id)}>
+            <Avatar name={c.name} size={28} avatarFile={c.avatarFile} hue={c.bubbleColor} />
+            <span class="home-main"><span class="home-text">{c.name}</span></span>
+            <span class="home-time">{formatTime(c.lastMessageAt)}</span>
+          </button>
+        {/each}
+      {:else}
+        <div class="muted home-empty"><MessageSquare size={40} strokeWidth={1.5} /><p>No chats yet.</p></div>
+      {/if}
+      <div class="home-keys">Ctrl+N new chat · Ctrl+K search</div>
     </div>
   </div>
 {/if}
@@ -1272,16 +1345,6 @@
     align-items: center;
     gap: .5rem;
   }
-  /* Compact action group: one add menu plus the voice recorder. */
-  .attach-group {
-    display: inline-flex;
-    align-items: stretch;
-    flex-shrink: 0;
-    align-self: center;
-    position: relative;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-  }
   .compose-input {
     flex: 1;
     min-height: 2.25rem;
@@ -1300,47 +1363,103 @@
     outline-offset: 0;
   }
   .send {
-    padding: .5rem .9rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
     border-radius: var(--radius);
     border: none;
-    background: var(--accent, var(--bubble-mine));
-    color: var(--accent-on, var(--bubble-mine-on));
+    background: var(--accent);
+    color: var(--accent-contrast);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
   }
-  .send:disabled {
-    opacity: .45;
-    cursor: default;
-  }
-  .attach {
+  .send.save { background: var(--text); color: var(--bg); }
+  .attach-wrap { position: relative; flex: none; }
+  .attach-solo {
+    width: 2.5rem;
+    height: 2.5rem;
+    flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 2.5rem;
-    padding: .45rem .6rem;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: transparent;
+    color: var(--text);
+  }
+  .attach-solo:hover:not(:disabled) { background: var(--surface-hover); }
+  .compose-field { position: relative; flex: 1; min-width: 0; display: flex; }
+  .compose-field .compose-input { padding-right: 2.9rem; resize: none; }
+  .home-card { width: min(380px, 100%); text-align: left; }
+  .home-label {
+    margin: 1rem 0 .35rem;
+    font-family: var(--font-mono);
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .home-label:first-child { margin-top: 0; }
+  .home-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    padding: .5rem .4rem;
     border: none;
+    border-top: 1px solid var(--border);
     border-radius: 0;
     background: transparent;
-    color: var(--text-muted);
-    font: inherit;
-    cursor: pointer;
-    line-height: 0;
-  }
-  .attach-group > .attach:last-child { border-left: 1px solid var(--border); }
-  .attach:first-child { border-radius: 11px 0 0 11px; }
-  .attach:last-child { border-radius: 0 11px 11px 0; }
-  .attach:hover:not(:disabled) {
     color: var(--text);
-    background: var(--surface-2, var(--surface));
+    text-align: left;
   }
-  .attach:disabled {
+  .home-row:hover { background: var(--surface-hover); }
+  .home-row :global(svg) { color: var(--accent); flex: none; }
+  .home-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .home-text { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .home-sub { font-size: .76rem; color: var(--text-muted); }
+  .home-time { font-family: var(--font-mono); font-size: .7rem; color: var(--text-muted); white-space: nowrap; }
+  .home-keys { margin-top: 1.2rem; font-family: var(--font-mono); font-size: .68rem; color: var(--text-muted); }
+  .home-empty { text-align: center; }
+  .aa-toggle {
+    position: absolute;
+    right: .35rem;
+    bottom: .32rem;
+    padding: .2rem .4rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font-weight: 600;
+    font-size: .82rem;
+    line-height: 1.2;
+  }
+  .aa-toggle:hover { background: var(--surface-hover); }
+  .aa-toggle.on { background: var(--accent-soft); color: var(--on-accent-soft); }
+  .rec-bar {
+    flex: 1;
+    min-width: 0;
+    min-height: 2.5rem;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: 0 .8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    background: var(--surface);
+  }
+  .rec-level { flex: 1; display: flex; align-items: center; gap: 2px; height: 24px; overflow: hidden; }
+  .rec-level i { display: block; flex: 1; max-width: 4px; min-width: 2px; border-radius: 2px; background: var(--danger); }
+  .rec-level i.off { opacity: .25; }
+  .send:disabled {
     opacity: .45;
     cursor: default;
-  }
-  .attach.recording {
-    color: var(--danger);
-    background: color-mix(in oklab, var(--danger) 12%, transparent);
   }
   .actions-backdrop,
   .actions-backdrop:hover {
@@ -1389,12 +1508,6 @@
   .format-toolbar button { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:1.8rem; padding:0; border:0; border-radius:5px; background:transparent; color:var(--text-muted); }
   .format-toolbar button:hover { background:var(--surface-hover); color:var(--text); filter:none; }
   .format-separator { width:1px; height:1.15rem; margin:0 2px; background:var(--border); }
-  .rec-indicator {
-    display: inline-flex;
-    align-items: center;
-    gap: .35rem;
-    padding: 0 .35rem;
-  }
   .rec-dot {
     width: 8px;
     height: 8px;

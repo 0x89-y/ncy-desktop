@@ -22,6 +22,10 @@ export const peerErrors = writable<Record<string, string>>({});
 export const serverStatus = writable<"starting" | "running" | "error" | "stopped">("starting");
 export const serverAddr = writable<string>("");
 export const lastSyncEvent = writable<SyncEventPayload | null>(null);
+/** Reminders still to ring, soonest first. Filled by the chat list's reminder scan,
+ *  so the empty chat pane can show them without reading every chat again. */
+export type UpcomingReminder = { chatId: string; chatName: string; text: string; at: number };
+export const upcomingReminders = writable<UpcomingReminder[]>([]);
 /** Phase 2b — set of blob hashes that have finished downloading this session.
  * Lets blob-rendering components reactively re-fetch when the bytes land. */
 export const arrivedBlobs = writable<Set<string>>(new Set());
