@@ -261,6 +261,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--accent); }
    so nothing is a box-in-a-box. */
 .settings { --settings-pad: 1.25rem; }
 .settings .group { margin: 0; }
+/* Mono section labels, shared by every settings page and the embedded panes. */
+.settings .subsection-title {
+  padding: 0 var(--settings-pad) .45rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  font-weight: 400;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
 /* Full-width divider between adjacent sections, so section breaks read as lines
    rather than plain whitespace. */
 .settings .group + .group {

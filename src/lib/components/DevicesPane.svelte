@@ -11,10 +11,22 @@
     peerErrors,
   } from "../stores/app";
   import { formatFullTime } from "../format";
-  import { X } from "@lucide/svelte";
+  import { EllipsisVertical, Laptop, Smartphone } from "@lucide/svelte";
   import { onMount } from "svelte";
 
+  /** "main": paired devices and pairing. "requests": the pairing request history,
+   *  which Settings shows under Advanced. */
+  let { part = "main" }: { part?: "main" | "requests" } = $props();
+
   let busy = $state(false);
+  let menuFor = $state<string | null>(null);
+  const claimedPairings = $derived($pairings.filter((p) => p.pairing.phoneId !== null));
+  const pendingPairings = $derived($pairings.filter((p) => p.pairing.phoneId === null));
+  /** Phones are not reported per connection, only by address, so a phone counts as
+   *  online when something is connected and it synced in the last five minutes. */
+  function phoneLooksOnline(lastSeenAt: number | null): boolean {
+    return $connectedPeers.size > 0 && lastSeenAt !== null && Date.now() - lastSeenAt < 5 * 60_000;
+  }
   let copyHint = $state<string | null>(null);
   let showManualPairing = $state(false);
   let showRecentRequests = $state(false);
@@ -168,186 +180,144 @@
 </script>
 
 <div class="devices">
-  <section class="group">
-    <div class="subsection-title">Add or share device</div>
-    <div class="opt-list">
-      <div class="field">
-        <span class="field-label">Share this desktop</span>
-        <div class="row form">
-          <button onclick={create} disabled={busy}>{busy ? "Creating..." : "Create pairing code"}</button>
-          <button type="button" class="ghost" onclick={() => (showManualPairing = !showManualPairing)}>
-            {showManualPairing ? "Hide manual" : "Manual"}
-          </button>
-        </div>
-        {#if showManualPairing}
-          <div class="manual-pairing">
-            <textarea
-              class="peer-input"
-              placeholder={'{"v":1,"deviceId":"...","name":"...","host":"...","port":8765,"secret":"..."}'}
-              bind:value={peerJson}
-              rows="3"
-              aria-label="Pairing JSON"
-            ></textarea>
-            <span class="tiny danger">
-              Pairing JSON is a credential; do not save or share copied values.
-            </span>
-            {#if peerError}
-              <div class="tiny err">{peerError}</div>
-            {/if}
-            <div class="row">
-              <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>
-                {peerBusy ? "Adding..." : "Add desktop"}
-              </button>
-            </div>
-          </div>
-        {/if}
-      </div>
-    </div>
-  </section>
-
-  {#if $pairings.length || $peers.length}
+  {#if part === "main"}
   <section class="group">
     <div class="subsection-title">Paired devices</div>
-    <div class="col list">
-        {#each $pairings as p (p.pairing.id)}
-          {@const claimed = p.pairing.phoneId !== null}
-          <div class="panel pairing">
-            <div class="row" style="justify-content:space-between">
-              <div class="col">
-                <div class="row" style="gap:.45rem">
-                  <span
-                    class="dot"
-                    class:paired={claimed}
-                    title={claimed ? "Paired" : "Awaiting device"}
-                  ></span>
-                  <strong>{claimed ? (p.pairing.phoneName || "Unnamed device") : p.pairing.label}</strong>
-                </div>
-                <span class="muted tiny">
-                  {#if claimed && duplicateDeviceName(p.pairing.phoneName)}
-                    ID {shortDeviceFingerprint(p.pairing.phoneId!)} ·
-                  {/if}
-                  Created {formatFullTime(p.pairing.createdAt)}
-                  {#if p.pairing.lastSeenAt} · last synchronized {formatFullTime(p.pairing.lastSeenAt)}{/if}
-                </span>
-              </div>
-              <div class="row" style="gap:.3rem">
-                {#if !claimed}
-                  <button class="ghost" onclick={() => replaceInvitation(p.pairing)}>
-                    Replace code
-                  </button>
-                {/if}
-                <button
-                  class="icon-btn"
-                  onclick={() => remove(p.pairing.id)}
-                  title="Revoke and remove pairing"
-                  aria-label="Revoke and remove pairing"
-                ><X size={15} strokeWidth={2.25} /></button>
-              </div>
+    {#if claimedPairings.length || $peers.length}
+      <div class="dev-list">
+        {#each claimedPairings as p (p.pairing.id)}
+          {@const online = phoneLooksOnline(p.pairing.lastSeenAt)}
+          <div class="dev-row">
+            <span class="dev-ico"><Smartphone size={18} strokeWidth={2} /></span>
+            <div class="dev-body">
+              <span class="dev-name">{p.pairing.phoneName || "Unnamed device"}</span>
+              <span class="dev-sub">
+                {#if duplicateDeviceName(p.pairing.phoneName)}ID {shortDeviceFingerprint(p.pairing.phoneId!)} · {/if}
+                {p.pairing.lastSeenAt ? `Synced ${fmtRelativeTime(p.pairing.lastSeenAt)}` : `Paired ${formatFullTime(p.pairing.createdAt)}`}
+              </span>
             </div>
-
-            {#if !claimed}
-              <p class="tiny muted">Replacing this invitation invalidates every previously copied version of this QR/JSON.</p>
-              <div class="row qrbox">
-                <div class="qr" aria-label="Pairing QR">
-                  {@html p.qrSvg}
+            <span class="presence" class:online>{online ? "online" : "away"}</span>
+            <div class="menu-anchor">
+              <button type="button" class="icon-btn" aria-label={`Options for ${p.pairing.phoneName || "device"}`} aria-expanded={menuFor === p.pairing.id} onclick={() => (menuFor = menuFor === p.pairing.id ? null : p.pairing.id)}><EllipsisVertical size={16} /></button>
+              {#if menuFor === p.pairing.id}
+                <button type="button" class="menu-backdrop" aria-label="Close menu" onclick={() => (menuFor = null)}></button>
+                <div class="row-menu" role="menu">
+                  <button type="button" role="menuitem" class="danger-item" onclick={() => { menuFor = null; void remove(p.pairing.id); }}>Remove device</button>
                 </div>
-                <div class="col json-box" style="flex:1; min-width:0;">
-                  <code class="json-pre">{p.payloadJson}</code>
-                  <span class="tiny danger">
-                    Contains a pairing credential. Copied JSON clears after 60 seconds if unchanged.
-                  </span>
-                  <div class="row">
-                    <button class="subtle" onclick={() => copy(p.payloadJson, p.pairing.id)}>
-                      Copy JSON
-                    </button>
-                    {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
-                  </div>
-                </div>
-              </div>
-            {/if}
+              {/if}
+            </div>
           </div>
         {/each}
 
         {#each $peers as p (p.id)}
           {@const online = p.enabled && $connectedPeers.has(p.id)}
           {@const deviceName = p.authenticatedName || p.label}
-          <div class="panel peer-card">
-            <div class="col" style="flex:1; min-width:0;">
-              <div class="row" style="gap:.45rem">
-                <span
-                  class="dot"
-                  class:paired={online}
-                  title={online ? "Connected" : "Waiting to connect"}
-                ></span>
-                <strong>{p.label}</strong>
-              </div>
-              <span class="muted tiny">
-                {#if p.authenticatedName && p.authenticatedName !== p.label}
-                  Device {p.authenticatedName} ·
-                {/if}
-                {#if duplicateDeviceName(deviceName)}
-                  Device ID {shortDeviceFingerprint(p.id)} ·
-                {/if}
-                {p.host}:{p.port}
-                {#if p.lastSeenAt} · last synchronized {formatFullTime(p.lastSeenAt)}{/if}
-                {#if !p.enabled} · automatic sync paused
-                {:else if !online && p.foregroundOnly} · open Ncy and enable phone sync there{/if}
+          <div class="dev-row">
+            <span class="dev-ico"><Laptop size={18} strokeWidth={2} /></span>
+            <div class="dev-body">
+              <span class="dev-name">{p.label}</span>
+              <span class="dev-sub">
+                {#if p.authenticatedName && p.authenticatedName !== p.label}Device {p.authenticatedName} · {/if}
+                {#if duplicateDeviceName(deviceName)}ID {shortDeviceFingerprint(p.id)} · {/if}
+                {#if !p.enabled}Automatic sync paused
+                {:else if p.lastSeenAt}Synced {fmtRelativeTime(p.lastSeenAt)}
+                {:else}{p.host}:{p.port}{/if}
+                {#if p.enabled && !online && p.foregroundOnly} · open Ncy and enable phone sync there{/if}
                 {#if p.enabled && $peerErrors[p.id]} · {$peerErrors[p.id]}{/if}
               </span>
               {#if p.enabled && !online && isPairingRepairError($peerErrors[p.id])}
-                <span class="tiny err">
-                  Automatic retries are stopped because this is a trust failure. Remove the peer and pair again.
-                </span>
+                <span class="tiny err">Automatic retries are stopped because this is a trust failure. Remove the peer and pair again.</span>
               {:else if p.enabled && !online && $peerErrors[p.id]}
-                <span class="muted tiny">
-                  If both devices are running, the network may block direct device traffic. Try a private LAN or hotspot.
-                </span>
+                <span class="tiny muted">If both devices are running, the network may block direct device traffic. Try a private LAN or hotspot.</span>
               {/if}
-              <button class="ghost compact" onclick={() => toggleDiagnostics(p.id)}>
-                {diagnostics[p.id] ? "Hide diagnostics" : "Show diagnostics"}
-              </button>
               {#if diagnostics[p.id]}
-                <div class="col tiny muted" style="gap:.15rem">
+                <div class="col tiny muted diag">
+                  <span>Address: {p.host}:{p.port}</span>
                   <span>Last discovery: {p.lastDiscoveredAt ? formatFullTime(p.lastDiscoveredAt) : "never"}</span>
                   <span>
                     Last authenticated: {p.lastAuthenticatedAt ? formatFullTime(p.lastAuthenticatedAt) : "never"}
-                    {#if p.lastAuthenticatedHost && p.lastAuthenticatedPort}
-                      at {p.lastAuthenticatedHost}:{p.lastAuthenticatedPort}
-                    {/if}
+                    {#if p.lastAuthenticatedHost && p.lastAuthenticatedPort} at {p.lastAuthenticatedHost}:{p.lastAuthenticatedPort}{/if}
                   </span>
-                  <span>
-                    Retry: {!p.enabled ? "paused by user" : online ? "not retrying" : p.nextRetryAt ? `scheduled ${formatFullTime(p.nextRetryAt)}` : isPairingRepairError($peerErrors[p.id]) ? "stopped until re-pairing" : "not scheduled"}
-                  </span>
+                  <span>Retry: {!p.enabled ? "paused by user" : online ? "not retrying" : p.nextRetryAt ? `scheduled ${formatFullTime(p.nextRetryAt)}` : isPairingRepairError($peerErrors[p.id]) ? "stopped until re-pairing" : "not scheduled"}</span>
                   <span>Direct LAN: {online ? "reachable" : ($peerErrors[p.id] || p.lastError) ? "possibly blocked; an offline peer looks the same" : "not currently tested"}</span>
                   {#if p.lastError}<span class="err">Last error: {p.lastError}</span>{/if}
                 </div>
               {/if}
             </div>
-            <div class="row" style="gap:.3rem">
-              <span class="chip" class:active={online}>
-                {!p.enabled ? "Paused" : online ? "Connected" : $peerErrors[p.id] ? "Connection error" : "Waiting to connect"}
-              </span>
-              <button
-                class="ghost compact"
-                onclick={() => setPeerEnabled(p.id, !p.enabled)}
-                title={p.enabled ? "Pause automatic sync" : "Resume automatic sync"}
-              >{p.enabled ? "Pause" : "Resume"}</button>
-              <button
-                class="icon-btn"
-                onclick={() => removePeer(p.id)}
-                title="Stop syncing with this desktop"
-                aria-label="Stop syncing with this desktop"
-              ><X size={15} strokeWidth={2.25} /></button>
+            <span class="presence" class:online class:error={p.enabled && !online && !!$peerErrors[p.id]}>
+              {!p.enabled ? "paused" : online ? "online" : $peerErrors[p.id] ? "error" : "away"}
+            </span>
+            <div class="menu-anchor">
+              <button type="button" class="icon-btn" aria-label={`Options for ${p.label}`} aria-expanded={menuFor === p.id} onclick={() => (menuFor = menuFor === p.id ? null : p.id)}><EllipsisVertical size={16} /></button>
+              {#if menuFor === p.id}
+                <button type="button" class="menu-backdrop" aria-label="Close menu" onclick={() => (menuFor = null)}></button>
+                <div class="row-menu" role="menu">
+                  <button type="button" role="menuitem" onclick={() => { menuFor = null; void setPeerEnabled(p.id, !p.enabled); }}>{p.enabled ? "Pause automatic sync" : "Resume automatic sync"}</button>
+                  <button type="button" role="menuitem" onclick={() => { menuFor = null; toggleDiagnostics(p.id); }}>{diagnostics[p.id] ? "Hide diagnostics" : "Show diagnostics"}</button>
+                  <button type="button" role="menuitem" class="danger-item" onclick={() => { menuFor = null; void removePeer(p.id); }}>Stop syncing with this desktop</button>
+                </div>
+              {/if}
             </div>
           </div>
         {/each}
-    </div>
+      </div>
+    {:else}
+      <p class="muted tiny inline-empty">No devices paired yet. Add one below.</p>
+    {/if}
   </section>
-  {:else}
-    <p class="muted tiny inline-empty">Create a pairing code to add your first device.</p>
+
+  <section class="group">
+    <div class="subsection-title">Add a device</div>
+    {#each pendingPairings as p (p.pairing.id)}
+      <div class="pair-box">
+        <div class="qr" aria-label="Pairing QR">{@html p.qrSvg}</div>
+        <div class="pair-body">
+          <ol class="steps">
+            <li>In Ncy on the phone, open Devices and scan this code.</li>
+            <li>Check that both screens show the same 6 digits, then confirm.</li>
+          </ol>
+          <div class="row pair-actions">
+            <button type="button" class="ghost" onclick={() => replaceInvitation(p.pairing)}>New code</button>
+            <button type="button" class="ghost" onclick={() => copy(p.payloadJson, p.pairing.id)}>Copy pairing text</button>
+            {#if copyHint === p.pairing.id}<span class="tiny muted">copied</span>{/if}
+            <button type="button" class="text-link" onclick={() => remove(p.pairing.id)}>Cancel</button>
+          </div>
+          <span class="tiny muted">A new code makes every earlier copy of this one stop working. Copied pairing text clears from the clipboard after 60 seconds.</span>
+        </div>
+      </div>
+    {:else}
+      <div class="pair-box empty">
+        <div class="pair-body">
+          <span>Pair a phone by scanning a code shown here.</span>
+          <div class="row pair-actions">
+            <button onclick={create} disabled={busy}>{busy ? "Creating…" : "Show pairing code"}</button>
+          </div>
+        </div>
+      </div>
+    {/each}
+    <button type="button" class="text-link manual-toggle" onclick={() => (showManualPairing = !showManualPairing)}>
+      {showManualPairing ? "Hide pairing text" : "Pair another desktop with pairing text"}
+    </button>
+    {#if showManualPairing}
+      <div class="manual-pairing">
+        <textarea
+          class="peer-input"
+          placeholder={'{"v":1,"deviceId":"...","name":"...","host":"...","port":8765,"secret":"..."}'}
+          bind:value={peerJson}
+          rows="3"
+          aria-label="Pairing JSON"
+        ></textarea>
+        <span class="tiny danger">Pairing text is a credential; do not save or share copied values.</span>
+        {#if peerError}<div class="tiny err">{peerError}</div>{/if}
+        <div class="row">
+          <button onclick={addDesktop} disabled={peerBusy || !peerJson.trim()}>{peerBusy ? "Adding…" : "Add desktop"}</button>
+        </div>
+      </div>
+    {/if}
+  </section>
   {/if}
 
-  {#if pairAttempts.length}
+  {#if part === "requests" && pairAttempts.length}
   <section class="group">
     <div class="subsection-title">Recent requests</div>
     <div class="opt-list">
@@ -389,13 +359,78 @@
 </div>
 
 <style>
+  .dev-list { display: flex; flex-direction: column; }
+  .dev-row {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    padding: .7rem var(--settings-pad);
+    border-top: 1px solid var(--border);
+  }
+  .dev-ico { color: var(--text-muted); display: inline-flex; flex: none; }
+  .dev-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+  .dev-name { font-size: .92rem; font-weight: 500; }
+  .dev-sub { font-size: .8rem; color: var(--text-muted); }
+  .diag { margin-top: .3rem; gap: .15rem; }
+  .presence {
+    display: inline-flex;
+    align-items: center;
+    gap: .35rem;
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    color: var(--text-muted);
+  }
+  .presence::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+    border: 1.5px solid currentColor;
+  }
+  .presence.online { color: var(--online); }
+  .presence.online::before { background: currentColor; }
+  .presence.error { color: var(--danger); }
+  .menu-anchor { position: relative; flex: none; }
+  .menu-backdrop, .menu-backdrop:hover {
+    position: fixed; inset: 0; z-index: 20; padding: 0; border: 0; border-radius: 0;
+    background: transparent; box-shadow: none; filter: none;
+  }
+  .row-menu {
+    position: absolute; z-index: 21; top: calc(100% + .25rem); right: 0; min-width: 14rem;
+    display: flex; flex-direction: column; padding: .3rem;
+    background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  }
+  .row-menu button {
+    text-align: left; padding: .45rem .6rem; border: 0; border-radius: var(--radius-sm);
+    background: transparent; color: var(--text); font-size: .88rem;
+  }
+  .row-menu button:hover { background: var(--surface-hover); }
+  .row-menu .danger-item { color: var(--danger); }
+  .pair-box {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin: .2rem var(--settings-pad) 0;
+    padding: .9rem;
+    border: 1px dashed var(--border-strong);
+    border-radius: 14px;
+  }
+  .pair-box.empty { align-items: flex-start; }
+  .pair-box .qr { width: 132px; height: 132px; flex: none; background: #fff; border-radius: 10px; padding: 6px; border: 1px solid var(--border-strong); }
+  .pair-box .qr :global(svg) { width: 100%; height: 100%; display: block; }
+  .pair-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .55rem; font-size: .88rem; }
+  .steps { margin: 0; padding-left: 1.2rem; display: flex; flex-direction: column; gap: .3rem; }
+  .pair-actions { gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .text-link, .text-link:hover {
+    background: transparent; border: 0; padding: .3rem .2rem; color: var(--accent); font-weight: 600; font-size: .86rem;
+  }
+  .manual-toggle { margin: .5rem var(--settings-pad) 0; align-self: flex-start; }
   .devices {
     border-top: 1px solid var(--border);
-    padding-top: .75rem;
-  }
-  .form { gap: .5rem; }
-  .form .ghost {
-    flex-shrink: 0;
+    padding: .75rem 0 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
   }
   .manual-pairing { display:flex; flex-direction:column; gap:.5rem; margin-top:.5rem; }
   .compact-btn {
@@ -404,25 +439,13 @@
     flex-shrink: 0;
     font-size: .85rem;
   }
-  .subsection-title { padding: .45rem var(--settings-pad); color: var(--text-muted); font-size: .78rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
   .inline-empty {
     margin: 0;
     padding: .75rem var(--settings-pad);
     border-top: 1px solid var(--border);
   }
   /* Cards run edge-to-edge, divided by the panel border-top (no gap). */
-  .list { gap: 0; }
-  .pairing { gap: .75rem; }
   /* Pairing status dot — amber while awaiting the device, green once paired. */
-  .dot {
-    display: inline-block;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--warning, var(--warning));
-    flex-shrink: 0;
-  }
-  .dot.paired { background: var(--success, var(--online)); }
   .danger { color: var(--danger); }
   /* Compact icon-only action button (the X remove). Overrides the global
      accent-pill button default. */
@@ -480,12 +503,6 @@
     color: var(--warning, var(--warning));
   }
   .spacer { flex: 1; }
-  .qrbox {
-    align-items: stretch;
-    gap: 1rem;
-    border-top: 1px solid var(--border);
-    padding-top: .75rem;
-  }
   .qr {
     width: 200px;
     height: 200px;
@@ -498,23 +515,6 @@
     flex-shrink: 0;
   }
   .qr :global(svg) { width: 100%; height: 100%; display: block; }
-  .json-box { gap: .5rem; }
-  .json-pre {
-    display: block;
-    background: var(--surface-2);
-    border-radius: 10px;
-    padding: .55rem .7rem;
-    font-family: var(--font-mono);
-    font-size: .8rem;
-    white-space: pre-wrap;
-    word-break: break-all;
-    overflow: auto;
-    max-height: 9rem;
-  }
-  .chip.active {
-    background: var(--primary-container);
-    color: var(--on-primary-container);
-  }
   .peer-input {
     width: 100%;
     box-sizing: border-box;

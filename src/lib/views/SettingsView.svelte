@@ -35,7 +35,7 @@
     installUpdate,
   } from "../stores/updater";
   import { CHANGELOG } from "../changelog";
-  import { Monitor, Sun, Moon, ArrowLeft, ChevronDown, ChevronRight, Copy, Download, Upload } from "@lucide/svelte";
+  import { Monitor, Sun, Moon, ArrowLeft, ChevronDown, ChevronRight, Copy, Download, Upload, RefreshCw } from "@lucide/svelte";
   import { onMount, onDestroy } from "svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import DevicesPane from "../components/DevicesPane.svelte";
@@ -43,7 +43,7 @@
 
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: "general", label: "General" },
-    { id: "sync", label: "Sync" },
+    { id: "sync", label: "Devices & sync" },
     { id: "interface", label: "Interface" },
     { id: "transcription", label: "Transcription" },
     { id: "backup", label: "Backup" },
@@ -615,10 +615,14 @@
 
 
    <div class="panes">
+  <div class="page-head">
+    <h2 class="page-title">{tabs.find((t) => t.id === $settingsTab)?.label ?? "Settings"}</h2>
+    {#if $settingsTab === "sync"}<p class="page-desc">Ncy only talks to devices you paired, on the same network.</p>{/if}
+  </div>
   {#if $settingsTab === "general"}
   <section class="group">
     <div class="settings-subsection">
-      <div class="subsection-title">Device</div>
+      <div class="subsection-title">This computer</div>
       <div class="opt-list">
         <label class="field">
           <span class="field-label">Device name</span>
@@ -640,7 +644,7 @@
       </div>
     </div>
     <div class="settings-subsection">
-      <div class="subsection-title">App behavior</div>
+      <div class="subsection-title">When Ncy starts and closes</div>
       <div class="opt-list">
         <label class="opt-row"><span class="opt-label">Launch on startup</span><span class="switch"><input type="checkbox" checked={desktopPrefs.launchOnStartup} onchange={(e) => updateDesktopPref("launchOnStartup", e.currentTarget.checked)} /><span class="slider"></span></span></label>
         <label class="opt-row"><span class="opt-label">Start minimized</span><span class="switch"><input type="checkbox" checked={desktopPrefs.startMinimized} onchange={(e) => updateDesktopPref("startMinimized", e.currentTarget.checked)} /><span class="slider"></span></span></label>
@@ -660,15 +664,14 @@
   </section>
   {:else if $settingsTab === "sync"}
   <section class="group">
-    <div class="settings-subsection">
-      <div class="subsection-title">Device synchronization</div>
-      <div class="opt-list">
-        <label class="opt-row">
-          <span class="opt-label">Sync between devices</span>
-          <span class="row status-control"><span class="status-badge" class:success={$serverStatus === "running"} class:error={$serverStatus === "error"}>{serverStatusLabel}</span><span class="switch"><input type="checkbox" checked={desktopPrefs.syncServerEnabled} onchange={(e) => updateDesktopPref("syncServerEnabled", e.currentTarget.checked)} /><span class="slider"></span></span></span>
-        </label>
-      </div>
-    </div>
+    <label class="status-card">
+      <span class="status-ic"><RefreshCw size={18} strokeWidth={2.25} /></span>
+      <span class="status-text">
+        <strong>Sync between devices</strong>
+        <span class="mono tiny muted" class:status-err={$serverStatus === "error"}>{serverStatusLabel}{$serverAddr ? ` · ${$serverAddr}` : ""} · {discoverable ? "discoverable" : "not discoverable"}</span>
+      </span>
+      <span class="switch"><input type="checkbox" checked={desktopPrefs.syncServerEnabled} onchange={(e) => updateDesktopPref("syncServerEnabled", e.currentTarget.checked)} /><span class="slider"></span></span>
+    </label>
   </section>
 
   <div class:sync-disabled={!desktopPrefs.syncServerEnabled}>
@@ -677,7 +680,7 @@
 
   <section class="group">
     <div class="settings-subsection">
-      <div class="subsection-title">File transfers</div>
+      <div class="subsection-title">Files</div>
       <div class="opt-list">
         <label class="field">
           <span class="field-label">Automatic file downloads</span>
@@ -694,21 +697,16 @@
       </div>
     </div>
     <div class="settings-subsection">
-      <div class="subsection-title">Troubleshooting</div>
-      <div class="opt-list">
-        <div class="opt-row">
-          <span class="opt-label">Replay everything<span class="inline-hint">{resyncNote}</span></span>
-          <button class="ghost" onclick={forceResync} disabled={resyncing}>{resyncing ? "Clearing…" : "Force full resync"}</button>
-        </div>
-      </div>
-    </div>
-    <div class="settings-subsection">
-      <button type="button" class="disclosure-row technical-disclosure" onclick={() => showSyncAdvanced = !showSyncAdvanced}>
-        <span><strong>Technical</strong><small class="inline-hint">Network and port details.</small></span>
+      <button type="button" class="disclosure-row technical-disclosure" aria-expanded={showSyncAdvanced} onclick={() => showSyncAdvanced = !showSyncAdvanced}>
+        <span><strong>Advanced</strong><small class="inline-hint">Troubleshooting, network details and recent pairing requests.</small></span>
         {#if showSyncAdvanced}<ChevronDown size={16} />{:else}<ChevronRight size={16} />{/if}
       </button>
       {#if showSyncAdvanced}
         <div class="opt-list">
+        <div class="opt-row">
+          <span class="opt-label">Replay everything<span class="inline-hint">{resyncNote}</span></span>
+          <button class="ghost" onclick={forceResync} disabled={resyncing}>{resyncing ? "Clearing…" : "Force full resync"}</button>
+        </div>
           <label class="opt-row nested-row">
             <span class="opt-label">Discoverable on local network<span class="inline-hint">Helps paired devices find this desktop after its address changes.</span></span>
             <span class="switch"><input type="checkbox" checked={discoverable} onchange={(e) => applyDiscoverable(e.currentTarget.checked)} /><span class="slider"></span></span>
@@ -732,6 +730,7 @@
             <div class="row technical-control"><input id="sync-port" type="number" min="1" max="65535" bind:value={port} oninput={markDirty} /><button onclick={applyPort} disabled={saving || !dirty}>{saving ? "Applying…" : "Apply"}</button></div>
           </div>
         </div>
+        <DevicesPane part="requests" />
       {/if}
     </div>
   </section>
@@ -946,6 +945,27 @@
   </section>
   {:else if $settingsTab === "backup"}
   <section class="group">
+    <div class="status-card backup-card">
+      <span class="status-ic"><Download size={18} strokeWidth={2.25} /></span>
+      <span class="status-text">
+        {#if desktopPrefs.autoBackupEnabled}
+          <strong>{desktopPrefs.lastAutoBackupAt ? `Last backup ${new Date(desktopPrefs.lastAutoBackupAt).toLocaleString()}` : "No automatic backup yet"}</strong>
+          {#if desktopPrefs.lastAutoBackupError}
+            <span class="tiny status-err">{desktopPrefs.lastAutoBackupError}</span>
+          {:else}
+            <span class="mono tiny muted">{desktopPrefs.autoBackupFolder ?? "No folder selected"}</span>
+          {/if}
+        {:else}
+          <strong>Automatic backups are off</strong>
+          <span class="tiny muted">Turn them on below, or export everything by hand.</span>
+        {/if}
+      </span>
+      {#if desktopPrefs.autoBackupEnabled}
+        <button onclick={runAutoBackupNow} disabled={backupBusy || !desktopPrefs.autoBackupFolder}>Back up now</button>
+      {/if}
+    </div>
+  </section>
+  <section class="group">
     <div class="settings-subsection">
       <div class="subsection-title">Media storage</div>
       <div class="opt-list">
@@ -1008,7 +1028,6 @@
         {#if desktopPrefs.autoBackupRetention !== null}
           <label class="opt-row"><span class="opt-label">Backups to keep</span><input type="number" min="1" max="100" value={desktopPrefs.autoBackupRetention} onchange={(e) => updateDesktopPref("autoBackupRetention", Math.min(100, Math.max(1, Number(e.currentTarget.value))))} /></label>
         {/if}
-        <div class="opt-row backup-action-row"><span class="opt-label">{desktopPrefs.lastAutoBackupAt ? `Last backup: ${new Date(desktopPrefs.lastAutoBackupAt).toLocaleString()}` : "No automatic backup yet"}{#if desktopPrefs.lastAutoBackupError}<span class="inline-hint" style="color:var(--danger)">{desktopPrefs.lastAutoBackupError}</span>{/if}</span><button onclick={runAutoBackupNow} disabled={backupBusy || !desktopPrefs.autoBackupFolder}>Back up now</button></div>
       {/if}
       </div>
       </div>
@@ -1134,6 +1153,29 @@
 </div>
 
 <style>
+  .page-head { padding: .35rem var(--settings-pad) .9rem; }
+  .page-title { font-size: 1.35rem; font-weight: 600; letter-spacing: -.02em; }
+  .page-desc { margin: .15rem 0 0; font-size: .84rem; color: var(--text-muted); }
+  .status-card {
+    display: flex;
+    align-items: center;
+    gap: .85rem;
+    margin: 0 var(--settings-pad) 1rem;
+    padding: .85rem 1rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 14px;
+    background: var(--surface);
+    cursor: pointer;
+  }
+  .status-ic {
+    width: 38px; height: 38px; flex: none; border-radius: 11px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--accent-soft); color: var(--on-accent-soft);
+  }
+  .status-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .1rem; }
+  .status-text strong { font-size: .95rem; }
+  .status-err { color: var(--danger) !important; }
+  .backup-card { cursor: default; }
   .page-scroll {
     height: 100%;
     width: 100%;
@@ -1290,6 +1332,8 @@
   .panes {
     flex: 1;
     min-width: 0;
+    /* Held to a readable width, so a label sits near its control on a wide window. */
+    max-width: 760px;
     display: flex;
     flex-direction: column;
     gap: 0;
@@ -1298,15 +1342,6 @@
   }
 
   .settings-subsection + .settings-subsection { margin-top: 1.15rem; }
-  .subsection-title {
-    padding: 0 var(--settings-pad) .45rem;
-    color: var(--text-muted);
-    font-family: var(--font-mono);
-    font-size: .7rem;
-    font-weight: 400;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-  }
   .disclosure-row {
     width: 100%;
     display: flex;
@@ -1322,10 +1357,6 @@
   .disclosure-row > span { display: flex; flex-direction: column; }
   .disclosure-row:hover { background: var(--surface-hover); filter: none; }
   .nested-row { padding-left: calc(var(--settings-pad) + .75rem) !important; background: color-mix(in oklab, var(--surface-2) 45%, transparent); }
-  .status-control { align-items: center; gap: .65rem; }
-  .status-badge { max-width: 15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: .75rem; }
-  .status-badge.success { color: var(--success); }
-  .status-badge.error { color: var(--danger); }
   .sync-disabled { opacity: .55; }
   .sync-disabled :global(button), .sync-disabled :global(input), .sync-disabled :global(textarea) { pointer-events: none; }
   .technical-disclosure { padding: .75rem var(--settings-pad); border-top: 1px solid var(--border); }
