@@ -75,23 +75,9 @@
     message.tags.length === 1 && message.tags[0].length <= 16 ? message.tags[0] : null,
   );
 
-  function remoteDeviceColor(deviceId: string | null | undefined): string {
-    let hash = 0;
-    const id = deviceId ?? "";
-    for (let i = 0; i < id.length; i += 1) {
-      hash = Math.imul(hash, 31) + id.charCodeAt(i);
-    }
-    return `hsl(${(hash >>> 0) % 360} 65% 52%)`;
-  }
-
-  const bubbleStyle = $derived.by(() => {
-    if (isRemote) return `--remote-device-color:${remoteDeviceColor(message.authorDeviceId)}`;
-    if (!bubbleColor) return "";
-    if (bubbleGradient) {
-      return `background:linear-gradient(135deg, ${bubbleColor}, color-mix(in oklab, ${bubbleColor} 60%, var(--bubble-mine)))`;
-    }
-    return `background:${bubbleColor}`;
-  });
+  // Bubbles take the theme, as on Android: yours on the accent tint, other
+  // devices' on plain paper. A chat's own colour lives on its tile instead.
+  const bubbleStyle = "";
 
   let busy = $state(false);
   let editing = $state(false);
@@ -946,7 +932,7 @@
     {/if}
 
     <div class="row meta tiny muted">
-      <span title={fullTime}>{time}</span>
+      <span class="meta-time" title={fullTime}>{time}</span>
       {#if message.editedAt}
         <span class="edited-indicator" title={editedTime ? `Edited ${editedTime}` : "Edited"} aria-label="Edited">
           <Pencil size={11} strokeWidth={2.35} />
@@ -1203,14 +1189,17 @@
     text-align: left;
     font: inherit;
     color: inherit;
-    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 12%, transparent);
+    background: transparent;
     border: none;
-    border-left: 3px solid color-mix(in srgb, var(--bubble-mine-on, currentColor) 70%, transparent);
-    border-radius: 6px;
+    border-left: 2px solid var(--accent);
+    border-radius: 0;
+    padding-left: .55rem;
+    color: var(--text-muted);
     cursor: pointer;
   }
   .reply-quote:hover:not(.deleted) {
-    background: color-mix(in srgb, var(--bubble-mine-on, currentColor) 18%, transparent);
+    background: transparent;
+    color: var(--text);
   }
   .reply-quote.deleted { cursor: default; }
   .reply-quote-time {
@@ -1230,29 +1219,32 @@
   .bubble {
     background: var(--bubble-mine);
     color: var(--bubble-mine-on);
-    border-radius: 18px 18px 4px 18px;
+    border: 1px solid var(--accent-edge);
+    border-radius: 16px 16px 5px 16px;
     padding: .48rem .72rem;
     max-width: min(640px, 85%);
     box-shadow: var(--shadow);
     position: relative;
   }
   .bubble.compact {
-    border-radius: 14px 14px 4px 14px;
+    border-radius: 14px 14px 5px 14px;
     padding: .34rem .58rem;
   }
   .bubble.remote {
-    --bubble-mine: var(--surface-2);
+    --bubble-mine: var(--surface);
     --bubble-mine-on: var(--text);
-    background: color-mix(in oklab, var(--remote-device-color) 24%, var(--surface));
+    background: var(--surface);
     color: var(--text);
-    border: 1px solid color-mix(in oklab, var(--remote-device-color) 38%, var(--border));
-    border-radius: 18px 18px 18px 4px;
+    border: 1px solid var(--border);
+    border-radius: 16px 16px 16px 5px;
   }
-  .bubble.remote.compact { border-radius: 14px 14px 14px 4px; }
+  .bubble.remote.compact { border-radius: 14px 14px 14px 5px; }
   .meta {
     margin-top: .2rem;
     gap: .35rem;
   }
+  .meta-time { font-family: var(--font-mono); font-size: .68rem; }
+  .meta .indicator { color: var(--accent); }
   .bubble.compact .meta {
     margin-top: .12rem;
     gap: .28rem;

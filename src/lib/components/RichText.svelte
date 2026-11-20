@@ -78,7 +78,7 @@
     border-radius: 8px;
     padding: 0.5rem 0.75rem;
     overflow: auto;
-    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.9rem;
     margin: 0 0 0.25rem 0;
   }

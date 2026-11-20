@@ -87,6 +87,7 @@
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
   const messageIds = $derived(new Set(($activeChat?.messages ?? []).map((m) => m.id)));
+  const starredCount = $derived(($activeChat?.messages ?? []).filter((m) => m.isStarred).length);
 
   function startReply(m: Message) {
     replyTarget = m;
@@ -820,12 +821,16 @@
         name={chat.metadata.name}
         size={34}
         avatarFile={chat.metadata.avatarFile}
+        hue={chat.metadata.bubbleColor}
       />
       <div class="col title-block">
         <div class="title">
           {#if chat.metadata.isPinned}<span class="title-ico"><Pin size={13} strokeWidth={2.25} /></span>{/if}
           {#if chat.metadata.isProtected}<span class="title-ico"><Lock size={13} strokeWidth={2.25} /></span>{/if}
           {chat.metadata.name}
+        </div>
+        <div class="subtitle">
+          {`${chat.messages.length} ${chat.messages.length === 1 ? "note" : "notes"}${starredCount ? ` · ${starredCount} starred` : ""}`}
         </div>
       </div>
       {#if chat.metadata.isProtected && chat.isUnlocked}
@@ -1122,7 +1127,7 @@
         {/if}
         <textarea
           class="compose-input"
-          placeholder="Type a message…"
+          placeholder="Write a note…"
           bind:this={composeTextarea}
           bind:value={composeText}
           oninput={resizeComposer}
@@ -1195,15 +1200,18 @@
     gap: .15rem;
   }
   .title {
-    font-weight: 700;
+    font-weight: 600;
+    letter-spacing: -.01em;
     font-size: 1.05rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .subtitle { font-size: .78rem; color: var(--text-muted); }
   .messages {
     flex: 1;
-    padding: 1rem;
+    /* A centred column up to 720px, so lines stay readable on a wide window. */
+    padding: 1rem max(1.5rem, calc((100% - 720px) / 2));
     display: flex;
     flex-direction: column;
     background-size: cover;

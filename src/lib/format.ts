@@ -127,15 +127,17 @@ export function avatarInitials(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
+// Chat hues, the same as Android's NcyChatHues: earthy enough to sit as a tint
+// on any accent's paper, distinct enough to tell apart.
 const PALETTE = [
-  "#6750a4",
-  "#7d5260",
-  "#1e88e5",
-  "#43a047",
-  "#fb8c00",
-  "#8e24aa",
-  "#00897b",
-  "#5e35b1",
+  "#b4471f", // terracotta
+  "#c69214", // ochre
+  "#2f855a", // green
+  "#0f766e", // teal
+  "#2b6cb0", // blue
+  "#805ad5", // violet
+  "#b83280", // plum
+  "#685f54", // stone
 ];
 
 export function avatarColor(seed: string): string {

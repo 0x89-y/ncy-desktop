@@ -139,7 +139,7 @@
     box-shadow: var(--card-shadow);
   }
   .fp {
-    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.9rem;
     background: var(--surface-2);
     padding: 0.2rem 0.4rem;
@@ -147,15 +147,17 @@
     user-select: all;
     letter-spacing: 0.05em;
   }
+  /* The hero of the dialog: large mono digits, split 3 and 3, as on the phone. */
   .safety-code {
-    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
-    font-size: 1.6rem;
-    font-weight: 600;
-    background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
-    color: var(--accent);
-    padding: 0.4rem 0.7rem;
-    border-radius: 10px;
-    letter-spacing: 0.35em;
+    font-family: var(--font-mono);
+    font-size: 2.1rem;
+    font-weight: 500;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    padding: 0.55rem 0.7rem;
+    border-radius: 12px;
+    letter-spacing: 0.08em;
     text-align: center;
     user-select: all;
   }

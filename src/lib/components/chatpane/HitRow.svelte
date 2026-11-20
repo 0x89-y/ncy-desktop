@@ -31,7 +31,7 @@
 <li data-search-index={resultIndex}>
   <button type="button" class="hit" class:selected onclick={() => onopen(chat.id)}>
     <span class="head">
-      <Avatar name={chat.name} size={26} avatarFile={chat.avatarFile} />
+      <Avatar name={chat.name} size={26} avatarFile={chat.avatarFile} hue={chat.bubbleColor} />
       <strong class="name"><HighlightedText text={chat.name} {query} /></strong>
       <span class="muted tiny time">{formatFullTime(message.createdAt)}</span>
     </span>

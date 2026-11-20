@@ -163,8 +163,9 @@ export type AppSettings = {
    *  works via QR / pasted JSON, but paired clients cannot recover automatically
    *  after this desktop's LAN address changes. */
   discoverable: boolean;
-  /** One of "purple" / "blue" / "green" / "pink" / "orange" / "teal" — drives
-   *  the `[data-accent='…']` CSS preset applied to `document.documentElement`. */
+  /** One of the accents in `lib/accent.ts` ("inkblue", "teal", …); older
+   *  values are mapped by `normalizeAccent`. Drives the `[data-accent='…']`
+   *  preset on `document.documentElement`, which the whole theme follows. */
   accent: string;
   /** When true, voice messages are auto-transcribed via a local whisper.cpp
    *  install. Off by default (opt-in — needs the model + CLI installed first). */

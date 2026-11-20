@@ -1,90 +1,96 @@
 # Ncy Desktop — design
 
-The visual language is **not defined here**. It lives in
-[`cy-design`](https://github.com/0x89-y/cy-design) (`e:\Github\cy-design`), the
-single source of truth for the whole "cy" family — principles, colour tokens with
-values, typography, shape, layout primitives, components, interaction patterns, and
-the avatar-colour hash. Read that first; §9 there maps each rule onto this app.
+Ncy has its own visual identity, shared by this app and the Android app. It used to
+follow [`cy-design`](https://github.com/0x89-y/cy-design), the spec for the "cy"
+family; since the 0.9 redesign it does not. The other cy apps still do.
 
-This file records only what is **specific to ncy-desktop**: where the tokens live,
-the local class vocabulary, the screens, and the places this app deliberately picks
-one option where the spec allows several. Anything that duplicated the spec has been
-removed rather than kept in sync badly — a second copy of a rule is a second copy to
-get wrong.
+The mockups the identity was settled on live in the Android repository under
+`docs/redesign/` (`desktop-mockups.html` for this app). Android's theme is
+`app/src/main/java/com/ncy/notechaty/ui/theme/NcyTheme.kt`; the colour formulas here
+are kept in step with it.
+
+## The identity in one paragraph
+
+Neutral greys, each tinted lightly toward the accent the user picks, so the whole
+window takes the accent's temperature. Geist for everything read, Geist Mono for
+times, counts and section labels. Notes are bubbles: yours on the accent tint on the
+right, notes from other devices on plain paper on the left. The accent marks what
+is yours, primary or selected; hover never uses it.
 
 ## Where things live
 
 | | |
 |---|---|
-| Tokens | `src/app.css` — CSS custom properties |
+| Tokens | `src/app.css`: CSS custom properties, derived from `--accent` with `color-mix()` |
 | Theme | `data-theme` attribute + `prefers-color-scheme` |
-| Accent | `data-accent` attribute; user-swappable (purple/blue/green/pink/orange/teal) |
-| Avatar colour | `avatarColor()` in `src/lib/format.ts` |
+| Accent | `data-accent` attribute; the seven presets are in `src/lib/accent.ts` and `app.css` |
+| Legacy accent names | `normalizeAccent()` in `src/lib/accent.ts` (purple → violet, blue → inkblue, …) |
+| Chat colour | `avatarColor()` in `src/lib/format.ts`; the same hash and hues as Android |
+| Fonts | `@fontsource/geist-sans` and `@fontsource/geist-mono`, imported in `src/main.ts` |
 
-Always reference the variables. A hard-coded hex, px radius, or shadow is a bug —
-the tokens are theme-aware and the accent is user-swappable, so a literal breaks in
-one theme or one accent and nobody notices until a screenshot.
+Always reference the variables. A hard-coded hex, px radius, or shadow is a bug:
+every neutral is derived from the accent, so a literal breaks in one theme or one
+accent and nobody notices until a screenshot.
+
+### Token roles
+
+- `--bg`, `--surface`, `--surface-2`, `--surface-hover`: grounds, all accent-tinted.
+- `--text`, `--text-muted`, `--border`, `--border-strong`: text and hairlines.
+- `--accent`, `--accent-contrast`, `--accent-hover`: the accent and text on it.
+- `--accent-soft`, `--accent-edge`, `--on-accent-soft`: the accent's soft side,
+  used for your bubbles, the selected filter chip, the active settings section, the
+  selected segment and the Up next card.
+- `--online`, `--warning`, `--danger`: status colours.
 
 ## Local class vocabulary
 
-The spec names the *patterns*; these are what they are called here.
-
-- **Divided lists** — `.divided-list` (chat list, search, starred, reminders).
-  Row buttons need `border-radius: 0` so their hover fill doesn't bulge past the
-  hairline dividers.
-- **Settings lists** — `.opt-list`, with `.opt-row` for label-left/control-right
-  rows and `.field` for label-above-input. Inside the settings panel these run
-  edge-to-edge; the panel frame is the only border, content inset by
-  `--settings-pad`.
-- **Segmented controls** — `.chip-seg` / `.chip-seg-btn` (tag filters),
-  `.attach-group` (composer +, checklist, mic), `.seg` / `.seg-btn` (theme picker).
-- **Settings frame** — `.side` / `.side-link` for the category rail (active = accent
-  left-bar + fill), `.panes` for the content side.
-
-**Message bubbles are the documented exception** to divided lists — they stay
-bubbles, per the spec's own carve-out.
+- **Lists**: `.divided-list` (chat list, search, starred, reminders). In the chat
+  list it runs flush to the pane, with mono `.chat-section-label`s (Pinned, All
+  chats, Archived). Row buttons need `border-radius: 0` so their hover fill doesn't
+  bulge past the hairlines.
+- **Settings lists**: `.opt-list`, with `.opt-row` for label-left/control-right rows
+  and `.field` for label-above-input, edge-to-edge and inset by `--settings-pad`.
+- **Segmented controls**: `.seg` / `.seg-btn`; the selected segment takes the accent
+  tint, not a solid fill.
+- **Settings frame**: `.side` / `.side-link` for the category rail (active = accent
+  tint), `.panes` for the content side.
 
 ## Screens
 
-**Title bar**: in the chats view, a button at the top left collapses the chat list to a
-narrow column of chat avatars with a new-chat button, or expands it again
-(remembered per device; Ctrl+K and Ctrl+N expand it). On the right:
-the sync status dot, the settings gear and the window buttons. No wordmark.
+**Title bar**: a button at the top left collapses the chat list to a narrow column of
+chat tiles (remembered per device; Ctrl+K and Ctrl+N expand it). On the right: the
+sync status dot, the settings gear and the window buttons. No wordmark.
 
-**Chats** — a left pane with three tabs (Chats · Favorites · Reminders), a profile
-switcher and search/filter actions in its header row, and the conversation on the
-right. Search is a **toggle in the header**, not a tab; opening it reveals a search
-row above the list and results replace the list while a query is present. New chat
-is a rounded-square accent FAB, bottom-right.
+**Chats**: the left pane mirrors the phone's home screen. A header row with the
+profile menu, search and filters; a large pane title; a sync line ("Synced with
+Pixel 8 · 2 minutes ago", hidden while nothing is paired); filter chips for All,
+Starred and Reminders; an Up next card for the next reminder; then the chats, pinned
+first. New chat is an accent button with its label, bottom-right. The conversation
+on the right sets its bubbles in a centred column up to 720px wide.
 
-**Settings** — one master-detail panel: category rail left, content right. Sections
+**Settings**: one master-detail panel, category rail left, content right. Sections
 are General · Sync · Interface · Transcription · Backup · Changelog · About.
-Settings **apply immediately**; there is no Save button. The selected rail item is
-not repeated as a page heading. About shows the version from `getVersion()`, a
-source link, and the changelog from `src/lib/changelog.ts`.
+Settings apply immediately; there is no Save button.
 
-## Deliberate local choices
+## Deliberate choices
 
-Where cy-design offers a choice, this is what ncy-desktop picked and why.
+- **Flat overlays.** `--shadow` and `--card-shadow` are `none`; menus read against
+  the page by border and surface step alone.
+- **Rounded-square buttons** on desktop (circles are for the phone).
+- **Count badges** are rounded rectangles (`--radius-sm`); pills are for true
+  indicators (status dots, toggles, filter chips).
+- **No chat colours on bubbles.** A chat's colour is the tint of its tile; bubbles
+  always follow the accent so the window stays one system.
 
-- **No wordmark, no dotted ground.** Like Acy and Spool, the title bar has no
-  "0x" wordmark, and like Acy the page background is plain `--bg` without the
-  dot grid. Dialogs use `--radius-dialog` (12px), matching Acy.
+## Reviewing UI without the back end
 
-- **Flat overlays.** The spec permits a single soft shadow (`--shadow-pop`) on
-  transient floating layers — context menus, popovers, inline editors — but does
-  not require it. This app declines: `--shadow` and `--card-shadow` are both `none`
-  and menus read against the page by border plus surface step alone. There is no
-  `--shadow-pop` token here. If one is ever added, it applies *only* to those
-  transient layers; structural surfaces stay flat.
-- **Square primary icon buttons.** The spec makes this platform-specific — circle on
-  Android, rounded square on desktop. Desktop uses `--radius`.
+`npm run dev` outside Tauri installs a sample-data stand-in for the back end
+(`src/dev/tauriMock.ts`, dev builds only). URL parameters: `?theme=dark|light`,
+`?accent=<name>`, `?chat=ideas`, `?view=settings&tab=interface`, `?pair=1`.
 
 ## Checks worth running before shipping UI
 
 - No hard-coded hex, `px` radius, or `box-shadow` outside the token set.
-- Both themes, and at least two accents — a literal usually only breaks in one.
-- Count badges are rounded rectangles (`--radius-sm`), not pills; pills are reserved
-  for true indicators (status dots, toggle track/knob, progress bars, scrollbar).
-- Hover on a neutral control goes to `--surface-hover` / `--surface-2`, never to
-  accent. Accent means primary or active, not "pointer is here".
+- Both themes, and at least two accents: a literal usually only breaks in one.
+- Hover on a neutral control goes to `--surface-hover` / `--surface-2`, never to the
+  accent. The accent means yours, primary or selected, not "pointer is here".

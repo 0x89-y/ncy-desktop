@@ -132,7 +132,7 @@
           {#each chatHits as c, i (c.id)}
             <li>
               <button type="button" class="chat-hit" class:selected={selectedIndex === i} data-search-index={i} onclick={() => selectChat(c.id)}>
-                <Avatar name={c.name} size={26} avatarFile={c.avatarFile} />
+                <Avatar name={c.name} size={26} avatarFile={c.avatarFile} hue={c.bubbleColor} />
                 <strong class="name"><HighlightedText text={c.name} {query} /></strong>
                 {#if c.lastMessagePreview}
                   <span class="muted tiny prev"><HighlightedText text={c.lastMessagePreview} {query} /></span>

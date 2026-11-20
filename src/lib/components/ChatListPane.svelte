@@ -1,19 +1,58 @@
 <script lang="ts">
   import { api } from "../ipc";
-  import { activeTag, allTags, chatListCollapsed, chatPane, chats, lastSyncEvent, newChatRequest, pinnedOnly, showArchived, type ChatPane } from "../stores/app";
-  import { Bell, Check, Filter, MessageSquare, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
+  import { activeTag, allTags, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, showArchived, type ChatPane } from "../stores/app";
+  import { Bell, Check, Filter, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
+  import type { Message } from "../ipc";
   import ChatList from "./ChatList.svelte";
   import ProfileMenu from "./ProfileMenu.svelte";
   import StarredPane from "./chatpane/StarredPane.svelte";
   import RemindersPane from "./chatpane/RemindersPane.svelte";
 
-  const tabs: { key: ChatPane; label: string; icon: typeof IconType }[] = [
-    { key: "chats", label: "Chats", icon: MessageSquare },
-    { key: "starred", label: "Favorites", icon: Star },
-    { key: "reminders", label: "Reminders", icon: Bell },
+  const tabs: { key: ChatPane; label: string; title: string; icon: typeof IconType | null }[] = [
+    { key: "chats", label: "All", title: "Chats", icon: null },
+    { key: "starred", label: "Starred", title: "Starred", icon: Star },
+    { key: "reminders", label: "Reminders", title: "Reminders", icon: Bell },
   ];
+  const paneTitle = $derived(tabs.find((t) => t.key === $chatPane)?.title ?? "Chats");
 
   let reminderCount = $state(0);
+  /** The next reminder to ring, shown above the chats. */
+  let upNext = $state<{ chatId: string; chatName: string; text: string; at: number; more: number } | null>(null);
+
+  function noteText(m: Message): string {
+    if (m.type === "CHECKLIST") return m.checklistItems.map((i) => i.text).join(", ");
+    if (m.type === "VOICE") return m.transcript ?? "Voice note";
+    const text = m.content.flatMap((b) => b.spans.map((s) => s.text)).join("").trim();
+    return text || (m.type === "IMAGE" ? "Photo" : m.type === "FILE" ? "File" : "Note");
+  }
+
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  function ago(ms: number): string {
+    const minutes = Math.round((ms - Date.now()) / 60_000);
+    if (Math.abs(minutes) < 60) return rtf.format(minutes, "minute");
+    const hours = Math.round(minutes / 60);
+    if (Math.abs(hours) < 24) return rtf.format(hours, "hour");
+    return rtf.format(Math.round(hours / 24), "day");
+  }
+  function clock(ms: number): string {
+    const d = new Date(ms), now = new Date();
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (d.toDateString() === now.toDateString()) return time;
+    return `${d.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  }
+
+  /** One line under the title: who this computer is syncing with. Hidden when nothing is paired. */
+  const syncLine = $derived.by(() => {
+    const paired = $pairings.map((p) => p.pairing).filter((p) => p.phoneId || p.lastSeenAt);
+    if (!paired.length) return null;
+    const latest = [...paired].sort((a, b) => (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0))[0];
+    const name = latest.phoneName || latest.label;
+    if ($connectedPeers.size > 0) {
+      const who = $connectedPeers.size > 1 ? `${$connectedPeers.size} devices` : name;
+      return { online: true, text: `Synced with ${who}${latest.lastSeenAt ? ` · ${ago(latest.lastSeenAt)}` : ""}` };
+    }
+    return { online: false, text: latest.lastSeenAt ? `${name} is away · seen ${ago(latest.lastSeenAt)}` : `Paired with ${name}` };
+  });
   let searchOpen = $state(false);
   let filtersOpen = $state(false);
   let query = $state("");
@@ -73,14 +112,19 @@
   async function refreshReminderCount(run: number) {
     const now = Date.now();
     let count = 0;
+    let next: { chatId: string; chatName: string; text: string; at: number } | null = null;
     for (const c of $chats) {
       const data = await api.getChat(c.id);
       if (!data) continue;
       for (const m of data.messages) {
-        if (m.reminderAt && m.reminderAt >= now) count += 1;
+        if (!m.reminderAt || m.reminderAt < now) continue;
+        count += 1;
+        if (!next || m.reminderAt < next.at) next = { chatId: c.id, chatName: c.name, text: noteText(m), at: m.reminderAt };
       }
     }
-    if (run === reminderCountRun) reminderCount = count;
+    if (run !== reminderCountRun) return;
+    reminderCount = count;
+    upNext = next ? { ...next, more: count - 1 } : null;
   }
 
   $effect(() => {
@@ -96,27 +140,7 @@
 <div class="pane col">
   <div class="tabs-row">
     <ProfileMenu />
-    <div class="tabs" aria-label="Chat views">
-      {#each tabs as t (t.key)}
-        {@const Icon = t.icon}
-        <button
-          type="button"
-          class="tab"
-          class:on={$chatPane === t.key}
-          title={t.label}
-          aria-label={t.label}
-          aria-pressed={$chatPane === t.key}
-          onclick={() => chatPane.set(t.key)}
-        >
-          <Icon size={16} strokeWidth={2.25} aria-hidden="true" />
-          {#if t.key === "reminders" && reminderCount > 0}
-            <span class="tab-badge" aria-label={`${reminderCount} reminders`}>
-              {reminderCount}
-            </span>
-          {/if}
-        </button>
-      {/each}
-    </div>
+    <span class="spacer"></span>
     <button
       class="header-action"
       class:active={searchOpen}
@@ -166,6 +190,41 @@
     {/if}
   </div>
 
+  <h1 class="pane-title">{paneTitle}</h1>
+  {#if syncLine}
+    <div class="sync-line"><span class="dot" class:online={syncLine.online}></span>{syncLine.text}</div>
+  {/if}
+  <div class="chips" role="tablist" aria-label="Chat views">
+    {#each tabs as t (t.key)}
+      {@const Icon = t.icon}
+      <button
+        type="button"
+        role="tab"
+        class="chip-tab"
+        class:on={$chatPane === t.key}
+        aria-selected={$chatPane === t.key}
+        onclick={() => chatPane.set(t.key)}
+      >
+        {#if Icon}<Icon size={13} strokeWidth={2.25} aria-hidden="true" />{/if}
+        {t.label}
+        {#if t.key === "chats"}<span class="count">{$chats.filter((c) => !c.isArchived).length}</span>{/if}
+        {#if t.key === "reminders" && reminderCount > 0}<span class="count">{reminderCount}</span>{/if}
+      </button>
+    {/each}
+  </div>
+
+  {#if upNext && $chatPane === "chats" && !searchOpen}
+    <button type="button" class="up-next" onclick={() => selectChat(upNext!.chatId)}>
+      <Bell size={16} strokeWidth={2.25} aria-hidden="true" />
+      <span class="up-body">
+        <span class="up-kicker">Up next · {clock(upNext.at)}</span>
+        <span class="up-text">{upNext.text}</span>
+        <span class="up-chat">in {upNext.chatName}</span>
+      </span>
+      {#if upNext.more > 0}<span class="up-more">+{upNext.more}</span>{/if}
+    </button>
+  {/if}
+
   {#if searchOpen}
     <div class="search-row">
       <Search size={15} strokeWidth={2.25} aria-hidden="true" />
@@ -192,56 +251,84 @@
   .tabs-row {
     display: flex;
     align-items: center;
-    gap: .35rem;
-    padding: .45rem;
+    gap: .25rem;
+    padding: .5rem .5rem 0 .85rem;
     flex-shrink: 0;
   }
-  .tabs {
-    display: flex;
-    flex: 1;
-    gap: 2px;
-    min-width: 0;
-    padding: 2px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-  }
-  .tab {
-    flex: 1;
-    min-width: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: .36rem .3rem;
-    background: transparent;
-    color: var(--text-muted);
-    border: none;
-    border-radius: var(--radius-sm);
-    font-weight: 500;
-    cursor: pointer;
-    line-height: 1;
-    transition: background-color .15s ease, color .15s ease;
-  }
-  .tab:hover:not(.on) { background: var(--surface-hover); color: var(--text); filter: none; }
-  .tab.on { background: var(--accent); color: var(--accent-contrast); }
-  .tab-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: .9rem;
-    height: .9rem;
-    padding: 0 .22rem;
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--accent);
-    font-size: .6rem;
+  .pane-title {
+    padding: .1rem 1.1rem 0;
+    font-size: 1.85rem;
     font-weight: 600;
-    line-height: 1;
+    letter-spacing: -.03em;
+    line-height: 1.15;
   }
-  .tab.on .tab-badge {
-    background: var(--accent-contrast);
-    color: var(--accent);
+  .sync-line {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    padding: .15rem 1.1rem 0;
+    font-size: .8rem;
+    color: var(--text-muted);
   }
+  .sync-line .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-pill);
+    border: 1.5px solid currentColor;
+    flex: none;
+  }
+  .sync-line .dot.online { background: var(--online); border-color: var(--online); }
+  .chips {
+    display: flex;
+    gap: .4rem;
+    padding: .7rem 1.1rem .75rem;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .chip-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .26rem .7rem;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    color: var(--text);
+    font-size: .8rem;
+    white-space: nowrap;
+  }
+  .chip-tab:hover:not(.on) { background: var(--surface-hover); }
+  /* Selected: the accent tint and bolder text, so it reads without colour alone. */
+  .chip-tab.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-edge);
+    color: var(--on-accent-soft);
+    font-weight: 600;
+  }
+  .chip-tab .count { font-family: var(--font-mono); font-size: .7rem; color: var(--text-muted); font-weight: 400; }
+  .chip-tab.on .count { color: var(--on-accent-soft); }
+  .up-next {
+    display: flex;
+    align-items: flex-start;
+    gap: .65rem;
+    margin: .75rem .75rem .1rem;
+    padding: .6rem .75rem;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-edge);
+    color: var(--on-accent-soft);
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .up-next:hover { background: var(--accent-soft); filter: brightness(.98); }
+  .up-next :global(svg) { margin-top: .15rem; flex: none; }
+  .up-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .up-kicker { font-family: var(--font-mono); font-size: .66rem; letter-spacing: .07em; text-transform: uppercase; }
+  .up-text { color: var(--text); font-weight: 500; font-size: .88rem; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; }
+  .up-chat { font-size: .78rem; }
+  .up-more { font-family: var(--font-mono); font-size: .72rem; align-self: center; }
   .header-action {
     width: 2rem;
     height: 2rem;

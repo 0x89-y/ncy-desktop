@@ -1,15 +1,18 @@
 <script lang="ts">
-  import { avatarColor, avatarInitials } from "../format";
+  import { avatarColor } from "../format";
   import { api, extractMediaHash } from "../ipc";
 
   let {
     name,
     size = 40,
     avatarFile = null,
-  }: { name: string; size?: number; avatarFile?: string | null } = $props();
+    hue = null,
+  }: { name: string; size?: number; avatarFile?: string | null; hue?: string | null } = $props();
 
-  const initials = $derived(avatarInitials(name));
-  const bg = $derived(avatarColor(name));
+  // One letter on a soft tint of the chat's colour, as on Android: the colour
+  // picked for the chat, or one derived from its name.
+  const initial = $derived(name.trim().charAt(0).toUpperCase() || "·");
+  const color = $derived(hue || avatarColor(name));
 
   // Pre-phase-2b avatars have legacy random/fixed names (e.g. "avatar.jpg"); those
   // never sync to the desktop. Only content-addressed refs are fetchable.
@@ -38,12 +41,13 @@
 
 <div
   class="avatar"
-  style="--size:{size}px; background:{dataUrl ? 'transparent' : bg};"
+  class:image={!!dataUrl}
+  style="--size:{size}px; --hue:{color};"
 >
   {#if dataUrl}
     <img src={dataUrl} alt={name} />
   {:else}
-    <span>{initials}</span>
+    <span>{initial}</span>
   {/if}
 </div>
 
@@ -51,16 +55,22 @@
   .avatar {
     width: var(--size);
     height: var(--size);
-    border-radius: calc(var(--size) * 0.28);
+    border-radius: calc(var(--size) * 0.31);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    color: white;
+    background: color-mix(in srgb, var(--hue) 17%, var(--surface));
+    color: color-mix(in srgb, var(--hue) 72%, var(--text));
     font-weight: 600;
-    font-size: calc(var(--size) * 0.4);
+    font-size: calc(var(--size) * 0.42);
     user-select: none;
     flex-shrink: 0;
     overflow: hidden;
+  }
+  .avatar.image { background: transparent; }
+  :global([data-theme='dark']) .avatar {
+    background: color-mix(in srgb, var(--hue) 24%, var(--surface));
+    color: color-mix(in srgb, var(--hue) 55%, var(--text));
   }
   img {
     width: 100%;

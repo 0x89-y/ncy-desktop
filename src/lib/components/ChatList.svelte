@@ -9,6 +9,8 @@
   let { query = "" }: { query?: string } = $props();
   const activeVisibleChats = $derived($visibleChats.filter((chat) => !chat.isArchived));
   const archivedVisibleChats = $derived($visibleChats.filter((chat) => chat.isArchived));
+  const pinnedChats = $derived(activeVisibleChats.filter((chat) => chat.isPinned));
+  const otherChats = $derived(activeVisibleChats.filter((chat) => !chat.isPinned));
 
 
 
@@ -326,7 +328,19 @@
     <div class="search-results"><SearchPane {query} /></div>
   {:else}
   <div class="list scroll divided-list">
-    {#each activeVisibleChats as c (c.id)}
+    {#if pinnedChats.length}
+      <div class="chat-section-label">Pinned</div>
+      {#each pinnedChats as c (c.id)}
+        <ChatListItem
+          chat={c}
+          selected={$activeChatId === c.id}
+          onclick={() => selectChat(c.id)}
+          oncontextmenu={(e) => openCtx(e, c)}
+        />
+      {/each}
+      {#if otherChats.length}<div class="chat-section-label">All chats</div>{/if}
+    {/if}
+    {#each otherChats as c (c.id)}
       <ChatListItem
         chat={c}
         selected={$activeChatId === c.id}
@@ -335,7 +349,7 @@
       />
     {/each}
     {#if archivedVisibleChats.length}
-      <div class="chat-section-label tiny muted">Archived chats</div>
+      <div class="chat-section-label">Archived</div>
       {#each archivedVisibleChats as c (c.id)}
         <ChatListItem
           chat={c}
@@ -352,8 +366,9 @@
   {/if}
 
   {#if !creating && !query.trim()}
-    <button class="fab" title="New chat" aria-label="New chat" onclick={startCreate}>
-      <Plus size={22} strokeWidth={2.5} />
+    <button class="fab" title="New chat (Ctrl+N)" onclick={startCreate}>
+      <Plus size={18} strokeWidth={2.5} aria-hidden="true" />
+      <span>New chat</span>
     </button>
   {/if}
 </div>
@@ -387,14 +402,16 @@
     right: 1rem;
     bottom: 1rem;
     z-index: 5;
-    width: 44px;
-    height: 44px;
+    height: 42px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 0;
-    border-radius: var(--radius);
-    box-shadow: var(--shadow, 0 4px 14px rgba(0, 0, 0, .3));
+    gap: .4rem;
+    padding: 0 1rem 0 .85rem;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: .88rem;
+    box-shadow: none;
   }
   .create {
     gap: .4rem;
@@ -479,7 +496,18 @@
     border-radius: 0;
   }
   .search-results { flex:1; min-height:0; overflow:hidden; }
-  .chat-section-label { padding:.65rem .65rem .35rem; border-top:1px solid var(--border); font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
+  /* Mono section labels, as on the phone; the list runs flush to the pane. */
+  .list.divided-list { border: 0; border-radius: 0; background: transparent; }
+  .list.divided-list > .chat-section-label,
+  .list.divided-list > .chat-section-label + :global(*) { border-top: none; }
+  .chat-section-label {
+    padding: .95rem 1.1rem .3rem;
+    font-family: var(--font-mono);
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
   .list > :global(.row-btn:last-child) {
     border-bottom: 1px solid var(--border);
   }

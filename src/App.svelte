@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { normalizeAccent } from "./lib/accent";
   import { onMount } from "svelte";
   import { activeView, bootstrap, chatListCollapsed, settings, serverStatus, connectedPeers, pairings } from "./lib/stores/app";
   import ChatListPane from "./lib/components/ChatListPane.svelte";
@@ -55,7 +56,7 @@
     const applied = setting === "system" ? (systemDark ? "dark" : "light") : setting;
     document.documentElement.dataset.theme = applied;
     document.documentElement.style.colorScheme = applied;
-    document.documentElement.dataset.accent = $settings?.accent ?? "purple";
+    document.documentElement.dataset.accent = normalizeAccent($settings?.accent);
   });
 </script>
 
@@ -188,7 +189,7 @@
     background: var(--outline);
     flex-shrink: 0;
   }
-  .dot.running { background: #34a853; }
+  .dot.running { background: var(--online); }
   .dot.err { background: var(--error); }
 
   .shell {
@@ -212,13 +213,13 @@
   .chats-pane.list-collapsed .chat-list-pane { display: none; }
   .chat-rail-pane {
     border-right: 1px solid var(--border);
-    background: var(--surface);
+    background: var(--bg);
     overflow: hidden;
     min-height: 0;
   }
   .chat-list-pane {
     border-right: 1px solid var(--border);
-    background: var(--surface);
+    background: var(--bg);
     overflow: hidden;
   }
   .chat-view-pane {

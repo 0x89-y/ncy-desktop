@@ -26,7 +26,7 @@
         aria-current={$activeChatId === c.id ? "true" : undefined}
         onclick={() => selectChat(c.id)}
       >
-        <Avatar name={c.name} size={32} avatarFile={c.avatarFile} />
+        <Avatar name={c.name} size={32} avatarFile={c.avatarFile} hue={c.bubbleColor} />
         {#if c.isProtected}<span class="lock"><Lock size={9} strokeWidth={2.5} /></span>{/if}
       </button>
     {/each}

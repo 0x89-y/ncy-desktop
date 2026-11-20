@@ -1,10 +1,11 @@
 import { mount } from "svelte";
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/500.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-mono/400.css";
-import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/geist-sans/400.css";
+import "@fontsource/geist-sans/500.css";
+import "@fontsource/geist-sans/600.css";
+import "@fontsource/geist-mono/400.css";
+import "@fontsource/geist-mono/500.css";
 import "./app.css";
+import { installTauriMock } from "./dev/tauriMock";
 import App from "./App.svelte";
 
 // Suppress the WebView's default right-click menu (Reload / Save As / Share /
@@ -22,5 +23,8 @@ document.addEventListener("contextmenu", (e) => {
 
 const target = document.getElementById("app");
 if (!target) throw new Error("missing #app");
+
+// Dev server only: sample data when running outside Tauri. A no-op otherwise.
+installTauriMock();
 
 mount(App, { target });

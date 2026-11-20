@@ -58,7 +58,7 @@
         {#each reminders as h (h.message.id)}
           <li>
             <button type="button" class="item" onclick={() => selectChat(h.chat.id)}>
-              <Avatar name={h.chat.name} size={30} avatarFile={h.chat.avatarFile} />
+              <Avatar name={h.chat.name} size={30} avatarFile={h.chat.avatarFile} hue={h.chat.bubbleColor} />
               <div class="col meta">
                 <strong class="name">{h.chat.name}</strong>
                 <span class="muted tiny preview">{preview(h.message)}</span>

@@ -419,10 +419,10 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: var(--warning, #d0a000);
+    background: var(--warning, var(--warning));
     flex-shrink: 0;
   }
-  .dot.paired { background: var(--success, #34a853); }
+  .dot.paired { background: var(--success, var(--online)); }
   .danger { color: var(--danger); }
   /* Compact icon-only action button (the X remove). Overrides the global
      accent-pill button default. */
@@ -468,16 +468,16 @@
     justify-content: center;
   }
   .attempt-outcome.accepted {
-    background: color-mix(in srgb, var(--success, #34a853) 20%, transparent);
-    color: var(--success, #34a853);
+    background: color-mix(in srgb, var(--success, var(--online)) 20%, transparent);
+    color: var(--success, var(--online));
   }
   .attempt-outcome.rejected {
     background: color-mix(in srgb, var(--danger, #b00) 18%, transparent);
     color: var(--danger, #b00);
   }
   .attempt-outcome.warned {
-    background: color-mix(in srgb, var(--warning, #d0a000) 22%, transparent);
-    color: var(--warning, #d0a000);
+    background: color-mix(in srgb, var(--warning, var(--warning)) 22%, transparent);
+    color: var(--warning, var(--warning));
   }
   .spacer { flex: 1; }
   .qrbox {
@@ -504,7 +504,7 @@
     background: var(--surface-2);
     border-radius: 10px;
     padding: .55rem .7rem;
-    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: .8rem;
     white-space: pre-wrap;
     word-break: break-all;
@@ -524,7 +524,7 @@
     border: 1px solid var(--outline-variant);
     background: var(--surface-2);
     color: inherit;
-    font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: .78rem;
     resize: vertical;
   }

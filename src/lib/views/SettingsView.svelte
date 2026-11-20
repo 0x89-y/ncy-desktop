@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ACCENTS, DEFAULT_ACCENT, normalizeAccent } from "../accent";
   import { api, type AppSettings, type BlobGcReport, type DesktopPrefs, type WhisperStatus, type TranscriptionEventPayload } from "../ipc";
   import { formatFileSize } from "../format";
   import {
@@ -62,7 +63,7 @@
   let port = $state(8765);
   let deviceName = $state("");
   let theme = $state<"system" | "light" | "dark">("system");
-  let accent = $state("purple");
+  let accent = $state<string>(DEFAULT_ACCENT);
   let discoverable = $state(false);
   let transcriptionEnabled = $state(false);
   let automaticFileDownloadLimitBytes = $state(100 * 1024 * 1024);
@@ -132,7 +133,7 @@
       }
       syncedSettings = $settings;
       theme = $settings.theme as "system" | "light" | "dark";
-      accent = $settings.accent ?? "purple";
+      accent = normalizeAccent($settings.accent);
       discoverable = $settings.discoverable;
       transcriptionEnabled = $settings.transcriptionEnabled ?? false;
       automaticFileDownloadLimitBytes =
@@ -204,7 +205,7 @@
     try {
       await persistSettings({ accent: value });
     } catch {
-      accent = $settings?.accent ?? "purple";
+      accent = normalizeAccent($settings?.accent);
     }
   }
 
@@ -312,14 +313,12 @@
     { value: "light", label: "Light", icon: Sun },
     { value: "dark", label: "Dark", icon: Moon },
   ];
-  const accents: { name: string; color: string; label: string }[] = [
-    { name: "purple", color: "#7c3aed", label: "Purple" },
-    { name: "blue", color: "#2563eb", label: "Blue" },
-    { name: "green", color: "#059669", label: "Green" },
-    { name: "pink", color: "#db2777", label: "Pink" },
-    { name: "orange", color: "#ea580c", label: "Orange" },
-    { name: "teal", color: "#0d9488", label: "Teal" },
-  ];
+  // Swatches show each accent as it renders in the current theme.
+  const accents = $derived(ACCENTS.map((a) => ({
+    name: a.name,
+    label: a.label,
+    color: document.documentElement.dataset.theme === "dark" ? a.dark : a.light,
+  })));
   let changelogSeries = $state("all");
   const changelogSeriesOptions = $derived([...new Set(CHANGELOG.map((entry) => entry.version.split(".").slice(0, 2).join(".")))]);
   const visibleChangelog = $derived(changelogSeries === "all" ? CHANGELOG : CHANGELOG.filter((entry) => entry.version.startsWith(`${changelogSeries}.`)));
@@ -742,7 +741,7 @@
       <div class="subsection-title">Appearance</div>
       <div class="opt-list">
         <div class="opt-row"><span class="opt-label">Theme</span><div class="seg">{#each themeModes as m (m.value)}{@const Icon = m.icon}<button type="button" class="seg-btn" class:on={theme === m.value} onclick={() => applyThemeNow(m.value)}><Icon size={16} />{m.label}</button>{/each}</div></div>
-        <div class="opt-row"><span class="opt-label">Accent color</span><div class="accents">{#each accents as a (a.name)}<button type="button" class="swatch" class:on={accent === a.name} style={`--sw:${a.color};`} title={a.label} aria-label={a.label} onclick={() => applyAccentNow(a.name)}></button>{/each}</div></div>
+        <div class="opt-row"><span class="opt-label">Accent color</span><div class="accents">{#each accents as a (a.name)}<span class="swatch-wrap" class:on={accent === a.name}><button type="button" class="swatch" class:on={accent === a.name} style={`--sw:${a.color};`} aria-label={a.label} aria-pressed={accent === a.name} onclick={() => applyAccentNow(a.name)}></button>{a.label}</span>{/each}</div></div>
       </div>
     </div>
     <div class="settings-subsection">
@@ -1155,10 +1154,7 @@
     display: flex;
     align-items: center;
     gap: .5rem;
-    min-height: 49px;
-    padding: .45rem .6rem;
-    background: var(--surface-2);
-    border-bottom: 1px solid var(--border);
+    padding: .9rem .35rem .8rem;
   }
   /* Round accent back button — the primary way out of settings. Background /
      hover color come from the global button default (accent + accent-hover). */
@@ -1177,7 +1173,7 @@
     line-height: 0;
   }
   .id {
-    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: .8rem;
     background: var(--surface-2);
     padding: .15rem .4rem;
@@ -1262,37 +1258,34 @@
     background: var(--surface);
   }
   .side {
-    flex: 0 0 160px;
+    flex: 0 0 210px;
     display: flex;
     flex-direction: column;
+    gap: 2px;
+    padding: 0 .6rem;
     border-right: 1px solid var(--border);
-    background: var(--surface-2);
+    background: var(--bg);
   }
-  .side h1 { font-size:.95rem; font-weight:600; }
+  .side h1 { font-size: 1.45rem; font-weight: 600; letter-spacing: -.03em; }
   .changelog-series { margin:0 var(--settings-pad) 1rem; max-width:calc(100% - 2 * var(--settings-pad)); overflow-x:auto; }
   .panes:has(.changelog-view) { padding-top:0; }
   .side-link {
     text-align: left;
-    padding: .55rem .7rem;
+    padding: .5rem .7rem;
     border: none;
-    border-top: 1px solid var(--border);
-    border-left: 2px solid transparent;
     background: transparent;
-    color: var(--text-muted);
-    border-radius: 0;
-    font-size: .92rem;
+    color: var(--text);
+    border-radius: 9px;
+    font-size: .9rem;
     font-weight: 500;
     cursor: pointer;
   }
-  .side-link:first-child { border-top: none; }
-  /* Close off the list with a divider under the last category, since the nav
-     column stretches taller than the links. */
-  .side-link:last-child { border-bottom: 1px solid var(--border); }
   .side-link:hover { background: var(--surface-hover); color: var(--text); filter: none; }
+  /* The active section takes the accent tint, like the selected filter chip. */
   .side-link.active {
-    background: var(--surface);
-    color: var(--text);
-    border-left-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--on-accent-soft);
+    font-weight: 600;
   }
   .panes {
     flex: 1;
@@ -1308,8 +1301,9 @@
   .subsection-title {
     padding: 0 var(--settings-pad) .45rem;
     color: var(--text-muted);
-    font-size: .75rem;
-    font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    font-weight: 400;
     letter-spacing: .08em;
     text-transform: uppercase;
   }
@@ -1401,8 +1395,9 @@
   }
   .seg-btn:hover { background: var(--surface-hover); color: var(--text); }
   .seg-btn.on {
-    background: var(--accent);
-    color: var(--accent-contrast);
+    background: var(--accent-soft);
+    color: var(--on-accent-soft);
+    font-weight: 600;
   }
   /* Matches the Chat / Starred / Reminders selector in the main sidebar. */
   .model-tabs {
@@ -1431,7 +1426,7 @@
     transition: background-color .15s ease, color .15s ease;
   }
   .model-tab:hover:not(.on) { background: var(--surface-hover); color: var(--text); filter: none; }
-  .model-tab.on { background: var(--accent); color: var(--accent-contrast); }
+  .model-tab.on { background: var(--accent-soft); color: var(--on-accent-soft); font-weight: 600; }
   .model-apply-row { margin-top: .15rem; }
   /* Accent swatch row */
   .accents {
@@ -1451,9 +1446,11 @@
   }
   .swatch:hover { transform: scale(1.08); }
   .swatch.on {
-    border-color: var(--text);
-    transform: scale(1.08);
+    border-color: transparent;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--text);
   }
+  .swatch-wrap { display: inline-flex; flex-direction: column; align-items: center; gap: .3rem; width: 3.6rem; font-size: .72rem; color: var(--text-muted); }
+  .swatch-wrap.on { color: var(--text); font-weight: 600; }
   .reaction-choice-grid {
     display: grid;
     grid-template-columns: repeat(8, 2rem);

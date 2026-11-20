@@ -1,48 +1,57 @@
-/* Ncy desktop — Acy-family visual identity.
-   Token names match Acy so the design language ports cleanly; a legacy alias
-   layer at the bottom remaps the old Ncy tokens that every component's scoped
-   CSS still references (--primary, --outline-variant, --bubble-mine, …). */
+/* Ncy desktop — the Ncy identity, shared with the Android app.
+   Every neutral is a grey tinted lightly toward the accent, so the whole window
+   follows the accent the user picks; the formulas match Android's NcyTheme.kt.
+   A legacy alias layer remaps the older token names that components' scoped CSS
+   still references (--primary, --outline-variant, --bubble-mine, …). */
 
 :root {
-  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Code', monospace;
+  --font-sans: 'Geist Sans', 'Geist', system-ui, -apple-system, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'Cascadia Code', monospace;
 
   --radius: 10px;
   --radius-sm: 7px;
-  --radius-dialog: 12px;
+  --radius-dialog: 14px;
   --radius-pill: 999px;
 
-  /* Light theme */
-  --bg: #f4f4f5;
+  /* The accent drives everything below; presets set it per theme. */
+  --accent: #2f5aa8;
+
+  /* Light theme: neutral greys tinted toward the accent. */
+  --bg: color-mix(in srgb, var(--accent) 5%, #f6f6f5);
   --surface: #ffffff;
-  --surface-2: #f7f7f8;
-  --surface-hover: #f0f0f2;
-  --text: #18181b;
-  --text-muted: #71717a;
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --accent: #7c3aed;
-  --accent-hover: #6d28d9;
+  --surface-2: color-mix(in srgb, var(--accent) 4%, #f9f9f8);
+  --surface-hover: color-mix(in srgb, var(--accent) 7%, #f0f0ef);
+  --text: color-mix(in srgb, var(--accent) 6%, #18181a);
+  --text-muted: color-mix(in srgb, var(--accent) 10%, #5f6066);
+  --border: color-mix(in srgb, var(--accent) 10%, #e3e3e3);
+  --border-strong: color-mix(in srgb, var(--accent) 12%, #d0d0d0);
+  /* Borders that must be seen (fields, unchecked boxes): 3:1 on --bg. */
+  --outline-strong: color-mix(in srgb, var(--accent) 12%, #86878c);
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, #000000);
   --accent-contrast: #ffffff;
-  --danger: #dc2626;
-  --success: #16a34a;
-  --warning: #d97706;
+  /* The accent's soft side: your notes, the selected filter, the active item. */
+  --accent-soft: color-mix(in srgb, var(--accent) 11%, #ffffff);
+  --accent-edge: color-mix(in srgb, var(--accent) 26%, #ffffff);
+  --on-accent-soft: color-mix(in srgb, var(--accent) 38%, #000000);
+  --danger: #b42318;
+  --success: #2f7d48;
+  --online: #2f7d48;
+  --warning: #b45309;
   --shadow: none;
   --card-shadow: none;
 
-  /* ---- Legacy ncy aliases — map onto the Acy tokens above. Lets every
-         component's existing scoped CSS pick up the new identity unchanged. */
+  /* ---- Legacy aliases — map older token names onto the ones above. */
   --on-bg: var(--text);
   --on-surface: var(--text);
   --on-surface-muted: var(--text-muted);
   --primary: var(--accent);
   --on-primary: var(--accent-contrast);
-  --primary-container: color-mix(in srgb, var(--accent) 16%, var(--surface));
-  --on-primary-container: var(--accent);
+  --primary-container: var(--accent-soft);
+  --on-primary-container: var(--on-accent-soft);
   --outline: var(--border-strong);
   --outline-variant: var(--border);
-  --bubble-mine: var(--accent);
-  --bubble-mine-on: var(--accent-contrast);
+  --bubble-mine: var(--accent-soft);
+  --bubble-mine-on: var(--text);
   --accent-on: var(--accent-contrast);
   --error: var(--danger);
   --surface-3: var(--surface-hover);
@@ -51,39 +60,48 @@
   --radius-xl: 20px;
 }
 
+/* Dark theme: a dark grey tinted toward the accent, never near-black, with text
+   at about 12:1. Accents are lighter here, so text on them is dark. */
 [data-theme='dark'] {
-  --bg: #161619;
-  --surface: #202024;
-  --surface-2: #27272c;
-  --surface-hover: #2e2e34;
-  --text: #f4f4f5;
-  --text-muted: #a8a8b2;
-  --border: #313139;
-  --border-strong: #43434d;
-  --accent: #8b5cf6;
-  --accent-hover: #a78bfa;
-  --accent-contrast: #ffffff;
-  --danger: #f87171;
-  --success: #4ade80;
-  --warning: #fbbf24;
+  --accent: #8fb0ea;
+  --bg: color-mix(in srgb, var(--accent) 7%, #1c1c1f);
+  --surface: color-mix(in srgb, var(--accent) 8%, #28282c);
+  --surface-2: color-mix(in srgb, var(--accent) 8%, #242428);
+  --surface-hover: color-mix(in srgb, var(--accent) 9%, #303035);
+  --text: color-mix(in srgb, var(--accent) 6%, #e2e2e5);
+  --text-muted: color-mix(in srgb, var(--accent) 10%, #9d9ea4);
+  --border: color-mix(in srgb, var(--accent) 10%, #323236);
+  --border-strong: color-mix(in srgb, var(--accent) 12%, #414146);
+  --outline-strong: color-mix(in srgb, var(--accent) 12%, #76777d);
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, #ffffff);
+  --accent-contrast: color-mix(in srgb, var(--accent) 7%, #1c1c1f);
+  --accent-soft: color-mix(in srgb, var(--accent) 20%, #28282c);
+  --accent-edge: color-mix(in srgb, var(--accent) 34%, #28282c);
+  --on-accent-soft: color-mix(in srgb, var(--accent) 55%, #ffffff);
+  --danger: #f07a6a;
+  --success: #7ccb94;
+  --online: #7ccb94;
+  --warning: #f0b45a;
   --shadow: none;
   --card-shadow: none;
 }
 
-/* Accent presets — light values; dark variants below at higher specificity. */
-[data-accent='purple']  { --accent: #7c3aed; --accent-hover: #6d28d9; }
-[data-accent='blue']    { --accent: #2563eb; --accent-hover: #1d4ed8; }
-[data-accent='green']   { --accent: #059669; --accent-hover: #047857; }
-[data-accent='pink']    { --accent: #db2777; --accent-hover: #be185d; }
-[data-accent='orange']  { --accent: #ea580c; --accent-hover: #c2410c; }
-[data-accent='teal']    { --accent: #0d9488; --accent-hover: #0f766e; }
+/* Accent presets, the same seven as Android — light values, dark below. */
+[data-accent='inkblue']    { --accent: #2f5aa8; }
+[data-accent='teal']       { --accent: #0f7069; }
+[data-accent='moss']       { --accent: #4a6e33; }
+[data-accent='violet']     { --accent: #6741c9; }
+[data-accent='plum']       { --accent: #8a3a66; }
+[data-accent='graphite']   { --accent: #3f3f46; }
+[data-accent='terracotta'] { --accent: #b4471f; }
 
-[data-theme='dark'][data-accent='purple']  { --accent: #8b5cf6; --accent-hover: #a78bfa; }
-[data-theme='dark'][data-accent='blue']    { --accent: #3b82f6; --accent-hover: #60a5fa; }
-[data-theme='dark'][data-accent='green']   { --accent: #10b981; --accent-hover: #34d399; }
-[data-theme='dark'][data-accent='pink']    { --accent: #ec4899; --accent-hover: #f472b6; }
-[data-theme='dark'][data-accent='orange']  { --accent: #f97316; --accent-hover: #fb923c; }
-[data-theme='dark'][data-accent='teal']    { --accent: #14b8a6; --accent-hover: #2dd4bf; }
+[data-theme='dark'][data-accent='inkblue']    { --accent: #8fb0ea; }
+[data-theme='dark'][data-accent='teal']       { --accent: #6cc9be; }
+[data-theme='dark'][data-accent='moss']       { --accent: #a3c487; }
+[data-theme='dark'][data-accent='violet']     { --accent: #b29bf5; }
+[data-theme='dark'][data-accent='plum']       { --accent: #db9bc0; }
+[data-theme='dark'][data-accent='graphite']   { --accent: #cfcfd6; }
+[data-theme='dark'][data-accent='terracotta'] { --accent: #dd8662; }
 
 * { box-sizing: border-box; }
 
