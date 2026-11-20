@@ -366,9 +366,8 @@
   {/if}
 
   {#if !creating && !query.trim()}
-    <button class="fab" title="New chat (Ctrl+N)" onclick={startCreate}>
-      <Plus size={18} strokeWidth={2.5} aria-hidden="true" />
-      <span>New chat</span>
+    <button class="fab" title="New chat (Ctrl+N)" aria-label="New chat" onclick={startCreate}>
+      <Plus size={20} strokeWidth={2.5} aria-hidden="true" />
     </button>
   {/if}
 </div>
@@ -402,15 +401,13 @@
     right: 1rem;
     bottom: 1rem;
     z-index: 5;
-    height: 42px;
+    width: 44px;
+    height: 44px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: .4rem;
-    padding: 0 1rem 0 .85rem;
+    padding: 0;
     border-radius: 12px;
-    font-weight: 600;
-    font-size: .88rem;
     box-shadow: none;
   }
   .create {
