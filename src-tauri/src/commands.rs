@@ -1589,6 +1589,54 @@ pub async fn author_update_chat_meta(
     Ok(())
 }
 
+/// Longest side of a stored chat picture. It is shown a few hundred pixels wide at most.
+const AVATAR_MAX_PX: u32 = 512;
+/// Longest side of a stored chat background.
+const BACKGROUND_MAX_PX: u32 = 1920;
+const CHAT_IMAGE_JPEG_QUALITY: u8 = 85;
+
+/// Shrink a chat picture or background before it is stored and synced, as the
+/// phone does: turned upright from its EXIF orientation, scaled to fit `max_px`,
+/// transparency flattened onto white, re-encoded as JPEG (which also drops the
+/// metadata, location included). Bytes that can't be decoded are kept as they are.
+fn shrink_chat_image(bytes: Vec<u8>, max_px: u32) -> Vec<u8> {
+    match try_shrink_chat_image(&bytes, max_px) {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::warn!("chat image: storing the original, couldn't shrink it: {e}");
+            bytes
+        }
+    }
+}
+
+fn try_shrink_chat_image(bytes: &[u8], max_px: u32) -> Result<Vec<u8>, image::ImageError> {
+    use image::{DynamicImage, ImageDecoder, ImageReader};
+
+    let mut decoder = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()?
+        .into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut img = DynamicImage::from_decoder(decoder)?;
+    img.apply_orientation(orientation);
+    if img.width().max(img.height()) > max_px {
+        img = img.resize(max_px, max_px, image::imageops::FilterType::Triangle);
+    }
+
+    let rgba = img.to_rgba8();
+    let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+    for (dst, src) in rgb.pixels_mut().zip(rgba.pixels()) {
+        let a = src[3] as u32;
+        for c in 0..3 {
+            dst[c] = ((src[c] as u32 * a + 255 * (255 - a)) / 255) as u8;
+        }
+    }
+
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, CHAT_IMAGE_JPEG_QUALITY)
+        .encode_image(&rgb)?;
+    Ok(out)
+}
+
 /// Set (or replace) a chat's avatar from a local file. Hashes the bytes,
 /// persists the blob content-addressed, then authors a `ChatMetadataChanged`
 /// pointing at `avatar/<hash>.jpg` — same on-the-wire shape the phone uses in
@@ -1605,6 +1653,7 @@ pub async fn author_set_chat_avatar(
     if bytes.is_empty() {
         return Err("empty image file".into());
     }
+    let bytes = shrink_chat_image(bytes, AVATAR_MAX_PX);
     let hash = crate::sync::blob::sha256_hex(&bytes);
     state
         .blobs
@@ -1638,6 +1687,7 @@ pub async fn author_set_chat_background(
     if bytes.is_empty() {
         return Err("empty image file".into());
     }
+    let bytes = shrink_chat_image(bytes, BACKGROUND_MAX_PX);
     let hash = crate::sync::blob::sha256_hex(&bytes);
     state
         .blobs
@@ -3078,6 +3128,44 @@ fn make_qr_svg(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn png_of(width: u32, height: u32, alpha: u8) -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(width, height, image::Rgba([200, 30, 30, alpha]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn chat_image_is_scaled_to_fit_and_becomes_jpeg() {
+        let out = shrink_chat_image(png_of(2000, 1000, 255), AVATAR_MAX_PX);
+        assert_eq!(image::guess_format(&out).unwrap(), image::ImageFormat::Jpeg);
+        let img = image::load_from_memory(&out).unwrap();
+        assert_eq!((img.width(), img.height()), (512, 256));
+    }
+
+    #[test]
+    fn small_chat_image_is_not_enlarged() {
+        let img = image::load_from_memory(&shrink_chat_image(png_of(100, 80, 255), AVATAR_MAX_PX))
+            .unwrap();
+        assert_eq!((img.width(), img.height()), (100, 80));
+    }
+
+    #[test]
+    fn transparent_chat_image_flattens_onto_white() {
+        let img = image::load_from_memory(&shrink_chat_image(png_of(16, 16, 0), AVATAR_MAX_PX))
+            .unwrap()
+            .to_rgb8();
+        assert!(img.get_pixel(8, 8).0.iter().all(|&c| c > 245));
+    }
+
+    #[test]
+    fn undecodable_chat_image_is_kept_as_is() {
+        let junk = b"not an image at all".to_vec();
+        assert_eq!(shrink_chat_image(junk.clone(), AVATAR_MAX_PX), junk);
+    }
 
     #[test]
     fn pairing_view_never_serializes_the_pairing_secret() {
