@@ -1,21 +1,20 @@
 <script lang="ts">
   import { api } from "../ipc";
   import { activeTag, activeView, allTags, upcomingReminders, chatListCollapsed, chatPane, chats, connectedPeers, lastSyncEvent, newChatRequest, pairings, pinnedOnly, selectChat, settingsTab, showArchived, type ChatPane } from "../stores/app";
-  import { Bell, Check, Filter, Search, Star, X, type Icon as IconType } from "@lucide/svelte";
+  import { Bell, Check, Filter, Search, X } from "@lucide/svelte";
   import type { Message } from "../ipc";
   import ChatList from "./ChatList.svelte";
   import ProfileMenu from "./ProfileMenu.svelte";
   import StarredPane from "./chatpane/StarredPane.svelte";
   import RemindersPane from "./chatpane/RemindersPane.svelte";
 
-  const tabs: { key: ChatPane; label: string; title: string; icon: typeof IconType | null }[] = [
-    { key: "chats", label: "All", title: "Chats", icon: null },
-    { key: "starred", label: "Starred", title: "Starred", icon: Star },
-    { key: "reminders", label: "Reminders", title: "Reminders", icon: Bell },
+  const tabs: { key: ChatPane; label: string; title: string }[] = [
+    { key: "chats", label: "All", title: "Chats" },
+    { key: "starred", label: "Starred", title: "Starred" },
+    { key: "reminders", label: "Reminders", title: "Reminders" },
   ];
   const paneTitle = $derived(tabs.find((t) => t.key === $chatPane)?.title ?? "Chats");
 
-  let reminderCount = $state(0);
   /** The next reminder to ring, shown above the chats. */
   let upNext = $state<{ chatId: string; chatName: string; text: string; at: number; more: number } | null>(null);
 
@@ -125,7 +124,6 @@
     }
     if (run !== reminderCountRun) return;
     upcoming.sort((a, b) => a.at - b.at);
-    reminderCount = upcoming.length;
     upNext = upcoming.length ? { ...upcoming[0], more: upcoming.length - 1 } : null;
     upcomingReminders.set(upcoming);
   }
@@ -199,22 +197,17 @@
       <span class="dot" class:online={syncLine.online}></span>{syncLine.text}
     </button>
   {/if}
-  <div class="chips" role="tablist" aria-label="Chat views">
+  <div class="view-tabs" role="tablist" aria-label="Chat views">
     {#each tabs as t (t.key)}
-      {@const Icon = t.icon}
       <button
         type="button"
         role="tab"
-        class="chip-tab"
+        class="view-tab"
         class:on={$chatPane === t.key}
         aria-selected={$chatPane === t.key}
+        data-label={t.label}
         onclick={() => chatPane.set(t.key)}
-      >
-        {#if Icon}<Icon size={13} strokeWidth={2.25} aria-hidden="true" />{/if}
-        {t.label}
-        {#if t.key === "chats"}<span class="count">{$chats.filter((c) => !c.isArchived).length}</span>{/if}
-        {#if t.key === "reminders" && reminderCount > 0}<span class="count">{reminderCount}</span>{/if}
-      </button>
+      >{t.label}</button>
     {/each}
   </div>
 
@@ -289,37 +282,51 @@
     flex: none;
   }
   .sync-line .dot.online { background: var(--online); border-color: var(--online); }
-  .chips {
+  /* The views as plain words on the list's top line; the current one is bold
+     with an accent underline that sits on the rule. */
+  .view-tabs {
     display: flex;
-    gap: .4rem;
-    padding: .7rem 1.1rem .75rem;
+    gap: 1.25rem;
+    padding: .45rem 1.1rem 0;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     overflow-x: auto;
     scrollbar-width: none;
   }
-  .chip-tab {
+  .view-tab {
     display: inline-flex;
+    flex-direction: column;
     align-items: center;
-    gap: .3rem;
-    padding: .26rem .7rem;
-    border-radius: var(--radius-pill);
-    border: 1px solid var(--border-strong);
+    position: relative;
+    padding: .35rem 0 .55rem;
+    margin-bottom: -1px;
+    border: 0;
     background: transparent;
-    color: var(--text);
-    font-size: .8rem;
+    color: var(--text-muted);
+    font-size: .84rem;
     white-space: nowrap;
   }
-  .chip-tab:hover:not(.on) { background: var(--surface-hover); }
-  /* Selected: the accent tint and bolder text, so it reads without colour alone. */
-  .chip-tab.on {
-    background: var(--accent-selected);
-    border-color: var(--accent);
-    color: var(--on-accent-soft);
+  /* Reserve the bold width so the row doesn't shift when the selection moves. */
+  .view-tab::before {
+    content: attr(data-label);
     font-weight: 600;
+    height: 0;
+    overflow: hidden;
+    visibility: hidden;
   }
-  .chip-tab .count { font-family: var(--font-mono); font-size: .7rem; color: var(--text-muted); font-weight: 400; }
-  .chip-tab.on .count { color: var(--on-accent-soft); }
+  .view-tab:hover:not(.on) { color: var(--text); }
+  .view-tab.on { color: var(--text); font-weight: 600; }
+  .view-tab.on::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+  .view-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   .up-next {
     display: flex;
     align-items: flex-start;
