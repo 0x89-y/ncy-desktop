@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.1 - 2026-11-21
+
+### Added
+
+- Pick a chat's colour from the desktop. It syncs to your other devices.
+
+### Changed
+
+- Chat settings are a new side panel: the chat's picture and name at the top (click
+  either to change them), switches for pinning and for showing other devices on the left,
+  and the auto-delete windows as one row of choices. The panel stays open while you
+  change things.
+- Settings are regrouped, led by a Devices & sync page that shows each paired device and
+  how to add one.
+- All, Starred and Reminders are now tabs, with the current one underlined in your
+  accent colour.
+- The composer works like the phone's: a + for files and checklists, and the mic turns
+  into send as you type. Recording shows a live level meter.
+- With no chat open, the window shows your next reminders and recent chats.
+- What's selected in Settings, the chat list and the profile menu stands out more
+  clearly. The current profile is highlighted instead of ticked.
+- With several devices paired, the sync line sums them up instead of naming just one.
+  Click it to open Devices & sync.
+- **New chat** is a plain + button, and the app uses the new Ncy page icon.
+- Chat pictures and backgrounds are scaled down before they're saved and synced, so they
+  take a fraction of the space. Their location data is removed.
+
+### Fixed
+
+- Chat pictures and backgrounds set on another device now show up as soon as they
+  arrive, without restarting the app.
+
 ## 0.8.0 - 2026-11-20
 
 ### Changed

@@ -15,6 +15,20 @@ export interface ChangelogEntry {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: "0.8.1",
+    date: "2026-11-21",
+    changes: [
+      "Chat settings are a new side panel, and you can pick a chat's colour.",
+      "Settings are regrouped, led by a Devices & sync page.",
+      "All, Starred and Reminders are now tabs.",
+      "The composer works like the phone's, with a live level meter when recording.",
+      "With no chat open, you see your next reminders and recent chats.",
+      "Selections stand out more clearly; the current profile is highlighted.",
+      "Chat pictures and backgrounds are scaled down before syncing.",
+      "Chat pictures from other devices show up without a restart.",
+    ],
+  },
+  {
     version: "0.8.0",
     date: "2026-11-20",
     changes: [

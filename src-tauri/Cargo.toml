@@ -1,6 +1,6 @@
 [package]
 name = "ncy-desktop"
-version = "0.8.0"
+version = "0.8.1"
 description = "Desktop client for Ncy"
 authors = ["0x89-y"]
 edition = "2021"
