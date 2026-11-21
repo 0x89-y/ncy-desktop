@@ -38,7 +38,7 @@ export function installTauriMock(): void {
   }
 
   const chats: Record<string, { meta: Partial<MaterializedChat["metadata"]>; messages: Message[] }> = {
-    ideas: { meta: { name: "Ideas", isPinned: true, bubbleColor: "#B4471F", remoteMessagesOnLeft: true }, messages: [] },
+    ideas: { meta: { name: "Ideas", isPinned: true, bubbleColor: "#B4471F", remoteMessagesOnLeft: true, tags: ["work", "ideas"] }, messages: [] },
     groceries: { meta: { name: "Groceries", isPinned: true, bubbleColor: "#2F855A" }, messages: [] },
     work: { meta: { name: "Work log", bubbleColor: "#2B6CB0" }, messages: [] },
     reading: { meta: { name: "Reading list", bubbleColor: "#805AD5" }, messages: [] },
@@ -95,11 +95,20 @@ export function installTauriMock(): void {
       const s = summary(chatId);
       return {
         metadata: { id: chatId, name: s.name, avatarFile: null, backgroundFile: null, createdAt: s.createdAt,
-          isPinned: s.isPinned, bubbleColor: s.bubbleColor, bubbleGradient: false, isArchived: false, tags: [],
-          isProtected: false, hideName: false, remoteMessagesOnLeft: !!c.meta.remoteMessagesOnLeft, retentionDays: null },
+          isPinned: s.isPinned, bubbleColor: s.bubbleColor, bubbleGradient: false, isArchived: !!c.meta.isArchived, tags: c.meta.tags ?? [],
+          isProtected: false, hideName: false, remoteMessagesOnLeft: !!c.meta.remoteMessagesOnLeft, retentionDays: c.meta.retentionDays ?? null },
         messages: c.messages, lastMessageAt: s.lastMessageAt, lastMessagePreview: s.lastMessagePreview,
         isUnlocked: true, profileId: "personal", profileName: "Personal",
       } satisfies MaterializedChat;
+    },
+    author_update_chat_meta: ({ chatId, ...patch }) => {
+      const meta = chats[chatId]?.meta;
+      if (!meta) return null;
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null) continue;
+        (meta as any)[k] = k === "bubbleColor" ? v || null : k === "retentionDays" ? v || null : v;
+      }
+      return null;
     },
     get_settings: () => settings,
     update_settings: ({ settings: next }) => (settings = { ...settings, ...next }),
@@ -149,6 +158,9 @@ export function installTauriMock(): void {
   setTimeout(() => emit("sync-event", { kind: "peer-connected", peer: "192.168.1.40", pairingId: "pr1", phoneId: "pixel" }), 300);
   const openChat = params.get("chat");
   if (openChat) setTimeout(() => void selectChat(openChat), 500);
+  if (params.has("chatsettings")) {
+    setTimeout(() => (document.querySelector('[aria-label="Chat settings"]') as HTMLElement | null)?.click(), 900);
+  }
   if (params.get("view") === "settings") {
     setTimeout(() => {
       settingsTab.set((params.get("tab") ?? "general") as SettingsTab);

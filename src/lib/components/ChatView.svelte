@@ -25,6 +25,7 @@
     ArrowDown, ArrowUp, Bell, Check, MessageSquare, Mic, Settings,
   } from "@lucide/svelte";
   import Avatar from "./Avatar.svelte";
+  import ChatSettingsPanel from "./ChatSettingsPanel.svelte";
   import MessageBubble from "./MessageBubble.svelte";
 
   let scroller: HTMLDivElement | undefined = $state();
@@ -441,26 +442,7 @@
 
   // ----- Chat management (rename / pin / archive / tags / delete) -----
   let chatSettingsOpen = $state(false);
-  // null = menu only; "rename"/"tags" = an inline editor is showing.
-  let editMode = $state<null | "rename" | "tags">(null);
-  let editValue = $state("");
   let metaBusy = $state(false);
-
-  function openEditor(mode: "rename" | "tags") {
-    const c = $activeChat;
-    if (!c) return;
-    editValue =
-      mode === "rename"
-        ? c.metadata.name
-        : c.metadata.tags.join(", ");
-    editMode = mode;
-    chatSettingsOpen = false;
-  }
-
-  function cancelEdit() {
-    editMode = null;
-    editValue = "";
-  }
 
   /** Retention windows offered in the chat menu. 0 is the "keep everything" case. */
   const RETENTION_CHOICES = [
@@ -513,6 +495,7 @@
     tags?: string[];
     remoteMessagesOnLeft?: boolean;
     retentionDays?: number;
+    bubbleColor?: string;
   }) {
     const c = $activeChat;
     if (!c || metaBusy) return;
@@ -575,31 +558,6 @@
     }
   }
 
-  async function saveEditor() {
-    const v = editValue.trim();
-    if (editMode === "rename") {
-      if (!v) return;
-      await runMeta({ name: v });
-    } else if (editMode === "tags") {
-      await runMeta({ tags: v.split(",").map((t) => t.trim()).filter(Boolean) });
-    }
-    cancelEdit();
-  }
-
-  async function togglePin() {
-    const c = $activeChat;
-    if (!c) return;
-    chatSettingsOpen = false;
-    await runMeta({ isPinned: !c.metadata.isPinned });
-  }
-
-  async function toggleArchive() {
-    const c = $activeChat;
-    if (!c) return;
-    chatSettingsOpen = false;
-    await runMeta({ isArchived: !c.metadata.isArchived });
-  }
-
   async function deleteChat() {
     const c = $activeChat;
     if (!c) return;
@@ -639,7 +597,6 @@
   async function setAvatar() {
     const c = $activeChat;
     if (!c) return;
-    chatSettingsOpen = false;
     const path = await pickImageFile();
     if (!path) return;
     try {
@@ -653,7 +610,6 @@
   async function clearAvatar() {
     const c = $activeChat;
     if (!c) return;
-    chatSettingsOpen = false;
     try {
       await api.authorClearChatAvatar(c.metadata.id);
       await refreshActiveChat();
@@ -665,7 +621,6 @@
   async function setBackground() {
     const c = $activeChat;
     if (!c) return;
-    chatSettingsOpen = false;
     const path = await pickImageFile();
     if (!path) return;
     try {
@@ -679,7 +634,6 @@
   async function clearBackground() {
     const c = $activeChat;
     if (!c) return;
-    chatSettingsOpen = false;
     try {
       await api.authorClearChatBackground(c.metadata.id);
       await refreshActiveChat();
@@ -897,87 +851,22 @@
     </header>
 
     {#if chatSettingsOpen}
-      <button class="settings-backdrop" aria-label="Close chat settings" onclick={() => chatSettingsOpen = false}></button>
-      <section class="chat-settings" aria-label="Chat settings">
-        <div class="settings-head"><div><strong>Chat settings</strong><div class="tiny muted">{chat.metadata.name}</div></div><button class="icon-close" title="Close" aria-label="Close" onclick={() => chatSettingsOpen = false}><X size={17} /></button></div>
-        <div class="settings-scroll">
-          <div class="settings-group"><span class="settings-label">Organization</span>
-            <button type="button" onclick={() => openEditor("rename")}>Rename…</button>
-            <button type="button" onclick={togglePin}>
-              {chat.metadata.isPinned ? "Unpin" : "Pin"}
-            </button>
-            <button type="button" onclick={toggleArchive}>
-              {chat.metadata.isArchived ? "Unarchive" : "Archive"}
-            </button>
-            <button type="button" onclick={() => openEditor("tags")}>Edit tags…</button>
-          </div>
-          <div class="settings-group"><span class="settings-label">Auto-delete old messages</span>
-            {#each RETENTION_CHOICES as choice (choice.days)}
-              <button
-                type="button"
-                class:active={(chat.metadata.retentionDays ?? 0) === choice.days}
-                onclick={() => void setRetention(choice.days)}
-              >
-                {choice.label}
-                {#if (chat.metadata.retentionDays ?? 0) === choice.days}<Check size={14} />{/if}
-              </button>
-            {/each}
-            <span class="settings-hint tiny muted">
-              Deletes on every device. Starred messages and ones with an upcoming reminder are kept.
-            </span>
-          </div>
-          <div class="settings-group"><span class="settings-label">Appearance</span>
-            <button
-              type="button"
-              onclick={() => {
-                void runMeta({ remoteMessagesOnLeft: !chat.metadata.remoteMessagesOnLeft });
-              }}
-            >{chat.metadata.remoteMessagesOnLeft ? "Keep all messages on right" : "Other devices on left"}</button>
-            <button type="button" onclick={setAvatar}>
-              {chat.metadata.avatarFile ? "Change avatar…" : "Set avatar…"}
-            </button>
-            {#if chat.metadata.avatarFile}
-              <button type="button" onclick={clearAvatar}>Remove avatar</button>
-            {/if}
-            <button type="button" onclick={setBackground}>
-              {chat.metadata.backgroundFile ? "Change background…" : "Set background…"}
-            </button>
-            {#if chat.metadata.backgroundFile}
-              <button type="button" onclick={clearBackground}>Remove background</button>
-            {/if}
-          </div>
-          <div class="settings-group"><span class="settings-label">Privacy</span>
-            {#if chat.metadata.isProtected}
-              <button type="button" onclick={() => openPin("change")}>Change PIN…</button>
-            {:else}
-              <button type="button" onclick={() => openPin("protect")}>Protect chat…</button>
-            {/if}
-          </div>
-          <div class="settings-group danger-group"><span class="settings-label">Data</span>
-            <button type="button" class="danger" onclick={deleteChat}>Delete chat</button>
-          </div>
-        </div>
-      </section>
+      <ChatSettingsPanel
+        {chat}
+        busy={metaBusy}
+        retentionChoices={RETENTION_CHOICES}
+        onClose={() => (chatSettingsOpen = false)}
+        onMeta={runMeta}
+        onRetention={setRetention}
+        onSetAvatar={setAvatar}
+        onClearAvatar={clearAvatar}
+        onSetBackground={setBackground}
+        onClearBackground={clearBackground}
+        onPin={openPin}
+        onDelete={deleteChat}
+      />
     {/if}
 
-    {#if editMode}
-      <div class="meta-editor">
-        <input
-          class="meta-input"
-          placeholder={editMode === "rename" ? "Chat name" : "tag1, tag2, tag3"}
-          bind:value={editValue}
-          onkeydown={(e) => {
-            if (e.key === "Enter") { e.preventDefault(); void saveEditor(); }
-            if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
-          }}
-          disabled={metaBusy}
-        />
-        <button type="button" class="send" onclick={saveEditor} disabled={metaBusy}>
-          {metaBusy ? "…" : "Save"}
-        </button>
-        <button type="button" class="text-btn" onclick={cancelEdit}>Cancel</button>
-      </div>
-    {/if}
 
     {#if pinMode}
       <div class="meta-editor pin-editor">
@@ -1689,18 +1578,6 @@
     cursor: pointer;
   }
   .menu-btn:hover { background: var(--surface-2, var(--surface)); }
-  .settings-backdrop, .settings-backdrop:hover { position:fixed; inset:32px 0 0; z-index:50; margin:0; padding:0; border:0; border-radius:0; background:rgba(0,0,0,.34); box-shadow:none; }
-  .chat-settings { position:fixed; top:32px; right:0; bottom:0; z-index:51; width:min(380px, 100vw); display:flex; flex-direction:column; background:var(--surface); border-left:1px solid var(--border); box-shadow:-10px 0 30px rgba(0,0,0,.2); }
-  .settings-head { display:flex; align-items:center; justify-content:space-between; padding:1rem; border-bottom:1px solid var(--border); }
-  .icon-close { display:inline-flex; align-items:center; justify-content:center; width:2rem; height:2rem; padding:0; border:0; background:transparent; color:var(--text-muted); }
-  .icon-close:hover { background:var(--surface-hover); color:var(--text); filter:none; }
-  .settings-scroll { overflow:auto; padding:.75rem; }
-  .settings-group { display:flex; flex-direction:column; padding:.4rem 0 .75rem; border-bottom:1px solid var(--border); }
-  .settings-label { padding:.35rem .6rem; color:var(--text-muted); font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
-  .settings-group button { border:0; background:transparent; color:inherit; text-align:left; padding:.6rem; border-radius:8px; font:inherit; }
-  .settings-group button:hover { background:var(--surface-hover); filter:none; }
-  .settings-group button.danger { color:var(--danger); }
-  .danger-group { border-bottom:0; }
   .meta-editor {
     display: flex;
     align-items: center;

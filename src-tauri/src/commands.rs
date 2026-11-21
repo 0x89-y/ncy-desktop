@@ -1523,6 +1523,20 @@ pub async fn author_create_chat(
     Ok(chat_id)
 }
 
+/// `""` clears a chat's colour; otherwise it must be `#RRGGBB`, the form the
+/// phone writes and parses. Stored upper-case, as the phone does.
+fn parse_chat_color(color: &str) -> Result<Option<String>, String> {
+    let color = color.trim();
+    if color.is_empty() {
+        return Ok(None);
+    }
+    let hex = color.strip_prefix('#').unwrap_or("");
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!("not a colour: {color}"));
+    }
+    Ok(Some(format!("#{}", hex.to_ascii_uppercase())))
+}
+
 /// Patch chat-level metadata from the desktop and sync it back. Only the provided
 /// fields change; everything else (avatar, background, protection salt, isProtected,
 /// createdAt, bubble style, hideName) is preserved — important because
@@ -1544,6 +1558,9 @@ pub async fn author_update_chat_meta(
     // A nested `Option<Option<_>>` would be the natural shape but serde cannot tell
     // an absent field from an explicit `null`, so both would arrive as `None`.
     retention_days: Option<u32>,
+    // The chat's colour as `#RRGGBB`; an empty string goes back to the colour the
+    // name gives (same absent-vs-null reasoning as `retention_days`).
+    bubble_color: Option<String>,
 ) -> Result<(), String> {
     let mut meta = current_metadata(&state.events, &chat_id)?;
     if let Some(n) = name {
@@ -1573,6 +1590,9 @@ pub async fn author_update_chat_meta(
         // Bounded: beyond a decade this is indistinguishable from "keep forever" and
         // only invites overflow in the cutoff arithmetic.
         meta.retention_days = Some(days).filter(|d| *d > 0 && *d <= 3650);
+    }
+    if let Some(color) = bubble_color {
+        meta.bubble_color = parse_chat_color(&color)?;
     }
     let payload = serde_json::to_value(&meta).map_err(|e| e.to_string())?;
     author_event(
@@ -3128,6 +3148,15 @@ fn make_qr_svg(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_color_is_validated_and_normalised() {
+        assert_eq!(parse_chat_color("#b4471f"), Ok(Some("#B4471F".into())));
+        assert_eq!(parse_chat_color(""), Ok(None));
+        assert!(parse_chat_color("red").is_err());
+        assert!(parse_chat_color("#12345").is_err());
+        assert!(parse_chat_color("#GGGGGG").is_err());
+    }
 
     fn png_of(width: u32, height: u32, alpha: u8) -> Vec<u8> {
         let img = image::RgbaImage::from_pixel(width, height, image::Rgba([200, 30, 30, alpha]));

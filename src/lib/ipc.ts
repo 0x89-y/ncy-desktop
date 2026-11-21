@@ -382,6 +382,8 @@ export const api = {
       remoteMessagesOnLeft?: boolean;
       /** Days to keep; 0 clears the rule. Omit to leave it unchanged. */
       retentionDays?: number;
+      /** `#RRGGBB`; "" goes back to the colour the name gives. Omit to leave it unchanged. */
+      bubbleColor?: string;
     },
   ) =>
     invoke<void>("author_update_chat_meta", {
@@ -392,6 +394,7 @@ export const api = {
       tags: patch.tags ?? null,
       remoteMessagesOnLeft: patch.remoteMessagesOnLeft ?? null,
       retentionDays: patch.retentionDays ?? null,
+      bubbleColor: patch.bubbleColor ?? null,
     }),
   authorCreateChat: (name: string, profileId: string, profileName: string) =>
     invoke<string>("author_create_chat", { name, profileId, profileName }),

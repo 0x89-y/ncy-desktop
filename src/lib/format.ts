@@ -129,7 +129,7 @@ export function avatarInitials(name: string): string {
 
 // Chat hues, the same as Android's NcyChatHues: earthy enough to sit as a tint
 // on any accent's paper, distinct enough to tell apart.
-const PALETTE = [
+export const CHAT_HUES = [
   "#b4471f", // terracotta
   "#c69214", // ochre
   "#2f855a", // green
@@ -145,7 +145,7 @@ export function avatarColor(seed: string): string {
   for (let i = 0; i < seed.length; i++) {
     h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   }
-  return PALETTE[h % PALETTE.length];
+  return CHAT_HUES[h % CHAT_HUES.length];
 }
 
 /** Human-readable byte count. Shared by the file card and transfer progress. */
